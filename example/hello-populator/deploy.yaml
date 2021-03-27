@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hello-account
+  namespace: hello
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: hello-role
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, patch, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+
+  - apiGroups: [hello.k8s.io]
+    resources: [hellos]
+    verbs: [get, list, watch]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: hello-binding
+subjects:
+  - kind: ServiceAccount
+    name: hello-account
+    namespace: hello
+roleRef:
+  kind: ClusterRole
+  name: hello-role
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: hello-populator
+  namespace: hello
+spec:
+  selector:
+    matchLabels:
+      app: hello
+  template:
+    metadata:
+      labels:
+        app: hello
+    spec:
+      serviceAccount: hello-account
+      containers:
+        - name: hello
+          image: hello-populator:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode=controller
+            - --image-name=hello-populator:latest
+---
+kind: VolumePopulator
+apiVersion: populator.storage.k8s.io/v1alpha1
+metadata:
+  name: hello-populator
+sourceKind:
+  group: hello.k8s.io
+  kind: Hello
