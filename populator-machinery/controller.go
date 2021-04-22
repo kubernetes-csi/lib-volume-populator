@@ -722,11 +722,15 @@ func (c *controller) ensureFinalizer(ctx context.Context, pvc *corev1.Persistent
 
 	if want {
 		// Add the finalizer to the end of the list
-		path := fmt.Sprintf("/metadata/finalizers/%d", len(finalizers))
 		patch = []patchOp{
 			{
+				Op:    "test",
+				Path:  "/metadata/finalizers",
+				Value: finalizers,
+			},
+			{
 				Op:    "add",
-				Path:  path,
+				Path:  "/metadata/finalizers/-",
 				Value: finalizer,
 			},
 		}
