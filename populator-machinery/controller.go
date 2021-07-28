@@ -413,24 +413,24 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		return err
 	}
 
-	dataSource := pvc.Spec.DataSource
-	if nil == dataSource {
+	dataSourceRef := pvc.Spec.DataSourceRef
+	if nil == dataSourceRef {
 		// Ignore PVCs without a datasource
 		return nil
 	}
 
-	if c.gk.Group != *dataSource.APIGroup || c.gk.Kind != dataSource.Kind || "" == dataSource.Name {
+	if c.gk.Group != *dataSourceRef.APIGroup || c.gk.Kind != dataSourceRef.Kind || "" == dataSourceRef.Name {
 		// Ignore PVCs that aren't for this populator to handle
 		return nil
 	}
 
 	var unstructured *unstructured.Unstructured
-	unstructured, err = c.unstLister.Namespace(pvc.Namespace).Get(dataSource.Name)
+	unstructured, err = c.unstLister.Namespace(pvc.Namespace).Get(dataSourceRef.Name)
 	if nil != err {
 		if !errors.IsNotFound(err) {
 			return err
 		}
-		c.addNotification(key, "unstructured", pvc.Namespace, dataSource.Name)
+		c.addNotification(key, "unstructured", pvc.Namespace, dataSourceRef.Name)
 		// We'll get called again later when the data source exists
 		return nil
 	}
@@ -619,7 +619,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 					},
 				},
 			}
-			patchPv.Annotations[c.populatedFromAnno] = pvc.Namespace + "/" + dataSource.Name
+			patchPv.Annotations[c.populatedFromAnno] = pvc.Namespace + "/" + dataSourceRef.Name
 			var patchData []byte
 			patchData, err = json.Marshal(patchPv)
 			if nil != err {
