@@ -1,6 +1,8 @@
 # See the OWNERS docs at https://go.k8s.io/owners
 
 approvers:
-  - bswartz
-  - saad-ali
-  - xing-yang
+- kubernetes-csi-approvers
+- bswartz
+
+reviewers:
+- kubernetes-csi-reviewers
