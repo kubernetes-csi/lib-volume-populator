@@ -6,3 +6,4 @@ approvers:
 
 reviewers:
 - kubernetes-csi-reviewers
+- bswartz
