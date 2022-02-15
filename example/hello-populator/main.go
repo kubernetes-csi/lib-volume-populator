@@ -22,12 +22,13 @@ import (
 	"os"
 	"strings"
 
-	populator_machinery "github.com/kubernetes-csi/lib-volume-populator/populator-machinery"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
+
+	populator_machinery "github.com/kubernetes-csi/lib-volume-populator/populator-machinery"
 )
 
 const (
@@ -43,6 +44,8 @@ func main() {
 		mode         string
 		fileName     string
 		fileContents string
+		httpEndpoint string
+		metricsPath  string
 		masterURL    string
 		kubeconfig   string
 		imageName    string
@@ -58,6 +61,10 @@ func main() {
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
 	flag.StringVar(&masterURL, "master", "", "The address of the Kubernetes API server. Overrides any value in kubeconfig. Only required if out-of-cluster.")
 	flag.StringVar(&imageName, "image-name", "", "Image to use for populating")
+	// Metrics args
+	flag.StringVar(&httpEndpoint, "http-endpoint", "", "The TCP network address where the HTTP server for diagnostics, including metrics and leader election health check, will listen (example: `:8080`). The default is empty string, which means the server is disabled.")
+	flag.StringVar(&metricsPath, "metrics-path", "/metrics", "The HTTP path where prometheus metrics will be exposed. Default is `/metrics`.")
+	// Other args
 	flag.BoolVar(&showVersion, "version", false, "display the version string")
 	flag.StringVar(&namespace, "namespace", "hello", "Namespace to deploy controller")
 	flag.Parse()
@@ -79,7 +86,7 @@ func main() {
 			gk  = schema.GroupKind{Group: groupName, Kind: kind}
 			gvr = schema.GroupVersionResource{Group: groupName, Version: apiVersion, Resource: resource}
 		)
-		populator_machinery.RunController(masterURL, kubeconfig, imageName,
+		populator_machinery.RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath,
 			namespace, prefix, gk, gvr, mountPath, devicePath, getPopulatorPodArgs)
 	case "populate":
 		populate(fileName, fileContents)

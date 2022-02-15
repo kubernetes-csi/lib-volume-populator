@@ -89,9 +89,10 @@ type controller struct {
 	workqueue          workqueue.RateLimitingInterface
 	populatorArgs      func(bool, *unstructured.Unstructured) ([]string, error)
 	gk                 schema.GroupKind
+	metrics            *metricsManager
 }
 
-func RunController(masterURL, kubeconfig, imageName, namespace, prefix string,
+func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, namespace, prefix string,
 	gk schema.GroupKind, gvr schema.GroupVersionResource, mountPath, devicePath string,
 	populatorArgs func(bool, *unstructured.Unstructured) ([]string, error),
 ) {
@@ -154,7 +155,11 @@ func RunController(masterURL, kubeconfig, imageName, namespace, prefix string,
 		workqueue:          workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		populatorArgs:      populatorArgs,
 		gk:                 gk,
+		metrics:            initMetrics(),
 	}
+
+	c.metrics.startListener(httpEndpoint, metricsPath)
+	defer c.metrics.stopListener()
 
 	pvcInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: c.handlePVC,
@@ -494,6 +499,9 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			return err
 		}
 
+		// Record start time for populator metric
+		c.metrics.operationStart(pvc.UID)
+
 		// If the pod doesn't exist yet, create it
 		if pod == nil {
 			var rawBlock bool
@@ -643,6 +651,9 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			return nil
 		}
 	}
+
+	// Record start time for populator metric
+	c.metrics.recordMetrics(pvc.UID, "success")
 
 	// *** At this point the volume population is done and we're just cleaning up ***
 
