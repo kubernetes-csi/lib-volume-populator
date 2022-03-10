@@ -108,17 +108,17 @@ func RunController(masterURL, kubeconfig, imageName, namespace, prefix string,
 	}()
 
 	cfg, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
-	if nil != err {
+	if err != nil {
 		klog.Fatalf("Failed to create config: %v", err)
 	}
 
 	kubeClient, err := kubernetes.NewForConfig(cfg)
-	if nil != err {
+	if err != nil {
 		klog.Fatalf("Failed to create client: %v", err)
 	}
 
 	dynClient, err := dynamic.NewForConfig(cfg)
-	if nil != err {
+	if err != nil {
 		klog.Fatalf("Failed to create dynamic client: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func RunController(masterURL, kubeconfig, imageName, namespace, prefix string,
 	kubeInformerFactory.Start(stopCh)
 	dynInformerFactory.Start(stopCh)
 
-	if err = c.run(stopCh); nil != err {
+	if err = c.run(stopCh); err != nil {
 		klog.Fatalf("Failed to run controller: %v", err)
 	}
 }
@@ -239,29 +239,29 @@ func (c *controller) addNotification(keyToCall, objType, namespace, name string)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.notifyMap[key]
-	if nil == s {
+	if s == nil {
 		s = &stringSet{make(map[string]empty)}
 		c.notifyMap[key] = s
 	}
 	s.set[keyToCall] = empty{}
 	s = c.cleanupMap[keyToCall]
-	if nil == s {
+	if s == nil {
 		s = &stringSet{make(map[string]empty)}
 		c.cleanupMap[keyToCall] = s
 	}
 	s.set[key] = empty{}
 }
 
-func (c *controller) cleanupNofications(keyToCall string) {
+func (c *controller) cleanupNotifications(keyToCall string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.cleanupMap[keyToCall]
-	if nil == s {
+	if s == nil {
 		return
 	}
 	for key := range s.set {
 		t := c.notifyMap[key]
-		if nil == t {
+		if t == nil {
 			continue
 		}
 		delete(t.set, keyToCall)
@@ -291,11 +291,11 @@ func translateObject(obj interface{}) metav1.Object {
 
 func (c *controller) handleMapped(obj interface{}, objType string) {
 	object := translateObject(obj)
-	if nil == object {
+	if object == nil {
 		return
 	}
 	var key string
-	if 0 == len(object.GetNamespace()) {
+	if len(object.GetNamespace()) == 0 {
 		key = objType + "/" + object.GetName()
 	} else {
 		key = objType + "/" + object.GetNamespace() + "/" + object.GetName()
@@ -312,7 +312,7 @@ func (c *controller) handleMapped(obj interface{}, objType string) {
 func (c *controller) handlePVC(obj interface{}) {
 	c.handleMapped(obj, "pvc")
 	object := translateObject(obj)
-	if nil == object {
+	if object == nil {
 		return
 	}
 	if c.populatorNamespace != object.GetNamespace() {
@@ -366,7 +366,7 @@ func (c *controller) runWorker() {
 		parts := strings.Split(key, "/")
 		switch parts[0] {
 		case "pvc":
-			if 3 != len(parts) {
+			if len(parts) != 3 {
 				utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 				return nil
 			}
@@ -375,7 +375,7 @@ func (c *controller) runWorker() {
 			utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 			return nil
 		}
-		if nil != err {
+		if err != nil {
 			c.workqueue.AddRateLimited(key)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
@@ -389,7 +389,7 @@ func (c *controller) runWorker() {
 			return
 		}
 		err := processNextWorkItem(obj)
-		if nil != err {
+		if err != nil {
 			utilruntime.HandleError(err)
 		}
 	}
@@ -405,7 +405,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 	var pvc *corev1.PersistentVolumeClaim
 	pvc, err = c.pvcLister.PersistentVolumeClaims(pvcNamespace).Get(pvcName)
-	if nil != err {
+	if err != nil {
 		if errors.IsNotFound(err) {
 			utilruntime.HandleError(fmt.Errorf("pvc '%s' in work queue no longer exists", key))
 			return nil
@@ -414,7 +414,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	}
 
 	dataSourceRef := pvc.Spec.DataSourceRef
-	if nil == dataSourceRef {
+	if dataSourceRef == nil {
 		// Ignore PVCs without a datasource
 		return nil
 	}
@@ -426,7 +426,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 	var unstructured *unstructured.Unstructured
 	unstructured, err = c.unstLister.Namespace(pvc.Namespace).Get(dataSourceRef.Name)
-	if nil != err {
+	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
 		}
@@ -437,12 +437,12 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 	var waitForFirstConsumer bool
 	var nodeName string
-	if nil != pvc.Spec.StorageClassName {
+	if pvc.Spec.StorageClassName != nil {
 		storageClassName := *pvc.Spec.StorageClassName
 
 		var storageClass *storagev1.StorageClass
 		storageClass, err = c.scLister.Get(storageClassName)
-		if nil != err {
+		if err != nil {
 			if !errors.IsNotFound(err) {
 				return err
 			}
@@ -451,10 +451,10 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			return nil
 		}
 
-		if nil != storageClass.VolumeBindingMode && storagev1.VolumeBindingWaitForFirstConsumer == *storageClass.VolumeBindingMode {
+		if storageClass.VolumeBindingMode != nil && storagev1.VolumeBindingWaitForFirstConsumer == *storageClass.VolumeBindingMode {
 			waitForFirstConsumer = true
 			nodeName = pvc.Annotations[annSelectedNode]
-			if "" == nodeName {
+			if nodeName == "" {
 				// Wait for the PVC to get a node name before continuing
 				return nil
 			}
@@ -466,7 +466,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	c.addNotification(key, "pod", c.populatorNamespace, podName)
 	var pod *corev1.Pod
 	pod, err = c.podLister.Pods(c.populatorNamespace).Get(podName)
-	if nil != err {
+	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
 		}
@@ -477,7 +477,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	c.addNotification(key, "pvc", c.populatorNamespace, pvcPrimeName)
 	var pvcPrime *corev1.PersistentVolumeClaim
 	pvcPrime, err = c.pvcLister.PersistentVolumeClaims(c.populatorNamespace).Get(pvcPrimeName)
-	if nil != err {
+	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
 		}
@@ -490,12 +490,12 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 		// Ensure the PVC has a finalizer on it so we can clean up the stuff we create
 		err = c.ensureFinalizer(ctx, pvc, c.pvcFinalizer, true)
-		if nil != err {
+		if err != nil {
 			return err
 		}
 
 		// If the pod doesn't exist yet, create it
-		if nil == pod {
+		if pod == nil {
 			var rawBlock bool
 			if nil != pvc.Spec.VolumeMode && corev1.PersistentVolumeBlock == *pvc.Spec.VolumeMode {
 				rawBlock = true
@@ -504,7 +504,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			// Calculate the args for the populator pod
 			var args []string
 			args, err = c.populatorArgs(rawBlock, unstructured)
-			if nil != err {
+			if err != nil {
 				return err
 			}
 
@@ -539,12 +539,12 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				pod.Spec.NodeName = nodeName
 			}
 			_, err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Create(ctx, pod, metav1.CreateOptions{})
-			if nil != err {
+			if err != nil {
 				return err
 			}
 
 			// If PVC' doesn't exist yet, create it
-			if nil == pvcPrime {
+			if pvcPrime == nil {
 				pvcPrime = &corev1.PersistentVolumeClaim{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      pvcPrimeName,
@@ -563,7 +563,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 					}
 				}
 				_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(c.populatorNamespace).Create(ctx, pvcPrime, metav1.CreateOptions{})
-				if nil != err {
+				if err != nil {
 					return err
 				}
 			}
@@ -576,7 +576,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			if corev1.PodFailed == pod.Status.Phase {
 				// Delete failed pods so we can try again
 				err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
-				if nil != err {
+				if err != nil {
 					return err
 				}
 			}
@@ -585,7 +585,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		}
 
 		// This would be bad
-		if nil == pvcPrime {
+		if pvcPrime == nil {
 			return fmt.Errorf("Failed to find PVC for populator pod")
 		}
 
@@ -593,7 +593,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		var pv *corev1.PersistentVolume
 		c.addNotification(key, "pv", "", pvcPrime.Spec.VolumeName)
 		pv, err = c.kubeClient.CoreV1().PersistentVolumes().Get(ctx, pvcPrime.Spec.VolumeName, metav1.GetOptions{})
-		if nil != err {
+		if err != nil {
 			if !errors.IsNotFound(err) {
 				return err
 			}
@@ -622,12 +622,12 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			patchPv.Annotations[c.populatedFromAnno] = pvc.Namespace + "/" + dataSourceRef.Name
 			var patchData []byte
 			patchData, err = json.Marshal(patchPv)
-			if nil != err {
+			if err != nil {
 				return err
 			}
 			_, err = c.kubeClient.CoreV1().PersistentVolumes().Patch(ctx, pv.Name, types.StrategicMergePatchType,
 				patchData, metav1.PatchOptions{})
-			if nil != err {
+			if err != nil {
 				return err
 			}
 
@@ -638,7 +638,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	}
 
 	// Wait for the bind controller to rebind the PV
-	if nil != pvcPrime {
+	if pvcPrime != nil {
 		if corev1.ClaimLost != pvcPrime.Status.Phase {
 			return nil
 		}
@@ -647,29 +647,29 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	// *** At this point the volume population is done and we're just cleaning up ***
 
 	// If the pod still exists, delete it
-	if nil != pod {
+	if pod != nil {
 		err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
-		if nil != err {
+		if err != nil {
 			return err
 		}
 	}
 
 	// If PVC' still exists, delete it
-	if nil != pvcPrime {
+	if pvcPrime != nil {
 		err = c.kubeClient.CoreV1().PersistentVolumeClaims(c.populatorNamespace).Delete(ctx, pvcPrime.Name, metav1.DeleteOptions{})
-		if nil != err {
+		if err != nil {
 			return err
 		}
 	}
 
 	// Make sure the PVC finalizer is gone
 	err = c.ensureFinalizer(ctx, pvc, c.pvcFinalizer, false)
-	if nil != err {
+	if err != nil {
 		return err
 	}
 
 	// Clean up our internal callback maps
-	c.cleanupNofications(key)
+	c.cleanupNotifications(key)
 
 	return nil
 }
@@ -751,12 +751,12 @@ func (c *controller) ensureFinalizer(ctx context.Context, pvc *corev1.Persistent
 	}
 
 	data, err := json.Marshal(patch)
-	if nil != err {
+	if err != nil {
 		return err
 	}
 	_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(ctx, pvc.Name, types.JSONPatchType,
 		data, metav1.PatchOptions{})
-	if nil != err {
+	if err != nil {
 		return err
 	}
 
