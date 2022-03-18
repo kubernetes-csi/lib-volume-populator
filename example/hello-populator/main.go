@@ -31,7 +31,6 @@ import (
 )
 
 const (
-	namespace  = "hello"
 	prefix     = "hello.k8s.io"
 	mountPath  = "/mnt"
 	devicePath = "/dev/block"
@@ -48,6 +47,7 @@ func main() {
 		kubeconfig   string
 		imageName    string
 		showVersion  bool
+		namespace    string
 	)
 	// Main arg
 	flag.StringVar(&mode, "mode", "", "Mode to run in (controller, populate)")
@@ -59,6 +59,7 @@ func main() {
 	flag.StringVar(&masterURL, "master", "", "The address of the Kubernetes API server. Overrides any value in kubeconfig. Only required if out-of-cluster.")
 	flag.StringVar(&imageName, "image-name", "", "Image to use for populating")
 	flag.BoolVar(&showVersion, "version", false, "display the version string")
+	flag.StringVar(&namespace, "namespace", "hello", "Namespace to deploy controller")
 	flag.Parse()
 
 	if showVersion {
