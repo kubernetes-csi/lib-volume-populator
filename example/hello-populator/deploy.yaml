@@ -61,11 +61,11 @@ spec:
       serviceAccount: hello-account
       containers:
         - name: hello
-          image: hello-populator:latest
+          image: k8s.gcr.io/sig-storage/hello-populator:v0.1.0
           imagePullPolicy: IfNotPresent
           args:
             - --mode=controller
-            - --image-name=hello-populator:latest
+            - --image-name=k8s.gcr.io/sig-storage/hello-populator:v0.1.0
 ---
 kind: VolumePopulator
 apiVersion: populator.storage.k8s.io/v1alpha1
