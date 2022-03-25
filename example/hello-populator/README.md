@@ -8,21 +8,6 @@ This example demonstrates an extremely simple populator implementation.
 Install kubernetes 1.17 or later, and enable the AnyVolumeDataSource
 feature gate.
 
-Build the image from code:
-
-`make all`
-
-Make sure you have a repo you can push to, and set the variable
-
-`YOUR_REPO=...`
-
-Push the image to your repo:
-
-```
-docker tag hello-populator:latest ${YOUR_REPO}/hello-populator:latest
-docker push ${YOUR_REPO}/hello-populator:latest
-```
-
 Install the CRD:
 
 `kubectl apply -f crd.yaml`
@@ -101,3 +86,20 @@ Wait for the job to complete:
 Get the logs from the job to verify that it worked:
 
 `kubectl logs job/job1`
+
+### To build the image from code:
+
+`make all`
+
+Make sure you have a repo you can push to, and set the variable
+
+`YOUR_REPO=...`
+
+Push the image to your repo:
+
+```
+docker tag hello-populator:latest ${YOUR_REPO}/hello-populator:latest
+docker push ${YOUR_REPO}/hello-populator:latest
+```
+
+To use the image, update deploy.yaml before installing the controller.
