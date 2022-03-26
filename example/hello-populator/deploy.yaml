@@ -73,7 +73,7 @@ spec:
               protocol: TCP
 ---
 kind: VolumePopulator
-apiVersion: populator.storage.k8s.io/v1alpha1
+apiVersion: populator.storage.k8s.io/v1beta1
 metadata:
   name: hello-populator
 sourceKind:
