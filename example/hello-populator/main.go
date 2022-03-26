@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	prefix     = "hello.k8s.io"
+	prefix     = "hello.example.com"
 	mountPath  = "/mnt"
 	devicePath = "/dev/block"
 )
@@ -77,7 +77,7 @@ func main() {
 	switch mode {
 	case "controller":
 		const (
-			groupName  = "hello.k8s.io"
+			groupName  = "hello.example.com"
 			apiVersion = "v1alpha1"
 			kind       = "Hello"
 			resource   = "hellos"
