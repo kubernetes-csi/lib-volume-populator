@@ -20,7 +20,7 @@ Create a CR:
 
 ```
 kubectl create -f - << EOF
-apiVersion: hello.k8s.io/v1alpha1
+apiVersion: hello.example.com/v1alpha1
 kind: Hello
 metadata:
   name: hello1
@@ -44,8 +44,8 @@ spec:
   resources:
     requests:
       storage: 10Mi
-  dataSource:
-    apiGroup: hello.k8s.io
+  dataSourceRef:
+    apiGroup: hello.example.com
     kind: Hello
     name: hello1
 EOF
