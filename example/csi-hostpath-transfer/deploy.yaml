@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: csi-hostpath-transfer
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: csi-hostpath-transfer-account
+  namespace: csi-hostpath-transfer
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: csi-hostpath-transfer-role
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, patch, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: [volumesnapshotlinks]
+    verbs: [get, list, watch]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["referencepolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: csi-hostpath-transfer-binding
+subjects:
+  - kind: ServiceAccount
+    name: csi-hostpath-transfer-account
+    namespace: csi-hostpath-transfer
+roleRef:
+  kind: ClusterRole
+  name: csi-hostpath-transfer-role
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: csi-hostpath-transfer-populator
+  namespace: csi-hostpath-transfer
+spec:
+  selector:
+    matchLabels:
+      app: csi-hostpath-transfer
+  template:
+    metadata:
+      labels:
+        app: csi-hostpath-transfer
+    spec:
+      serviceAccount: csi-hostpath-transfer-account
+      containers:
+        - name: csi-hostpath-transfer
+          image: csi-hostpath-transfer:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode=controller
+            - --image-name=csi-hostpath-transfer:latest
+            - --http-endpoint=:8080
+          ports:
+            - containerPort: 8080
+              name: http-endpoint
+              protocol: TCP
+---
+kind: VolumePopulator
+apiVersion: populator.storage.k8s.io/v1beta1
+metadata:
+  name: csi-hostpath-transfer
+sourceKind:
+  group: "snapshot.storage.k8s.io"
+  kind: VolumeSnapshotLink
