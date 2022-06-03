@@ -87,7 +87,8 @@ func main() {
 			gvr = schema.GroupVersionResource{Group: groupName, Version: apiVersion, Resource: resource}
 		)
 		populator_machinery.RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath,
-			namespace, prefix, gk, gvr, mountPath, devicePath, getPopulatorPodArgs)
+			namespace, prefix, gk, gvr, mountPath, devicePath, getPopulatorPodArgs,
+			populator_machinery.EmptyPatchPodFunc)
 	case "populate":
 		populate(fileName, fileContents)
 	default:

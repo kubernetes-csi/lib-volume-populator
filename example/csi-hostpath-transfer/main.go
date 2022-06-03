@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 
 	snapclientset "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -103,7 +104,7 @@ func main() {
 			gvr = schema.GroupVersionResource{Group: groupName, Version: apiVersion, Resource: resource}
 		)
 		populator_machinery.RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath,
-			namespace, prefix, gk, gvr, mountPath, devicePath, getPopulatorPodArgs)
+			namespace, prefix, gk, gvr, mountPath, devicePath, getPopulatorPodArgs, patchPodFunc)
 	case "populate":
 		cfg, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
 		if err != nil {
@@ -297,4 +298,23 @@ func getSourcePath(scl snapclientset.Interface, sourceNamespace, sourceSnapshotN
 	path := filepath.Join(stateDir, fmt.Sprintf("%s%s", snapshotID, snapshotExt))
 
 	return path, nil
+}
+
+func patchPodFunc(pod *corev1.Pod, pvc *corev1.PersistentVolumeClaim, dataSource *unstructured.Unstructured) (*corev1.Pod, error) {
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name: "csi-data-dir",
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: "/var/lib/csi-hostpath-data/",
+			},
+		},
+	})
+	con := &pod.Spec.Containers[0]
+	con.VolumeMounts = append(con.VolumeMounts, corev1.VolumeMount{
+		Name:      "csi-data-dir",
+		MountPath: "/csi-data-dir",
+	})
+	pod.Spec.ServiceAccountName = "csi-hostpath-transfer-account"
+
+	return pod, nil
 }

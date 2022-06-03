@@ -88,6 +88,7 @@ type controller struct {
 	cleanupMap         map[string]*stringSet
 	workqueue          workqueue.RateLimitingInterface
 	populatorArgs      func(bool, *unstructured.Unstructured) ([]string, error)
+	patchPodFunc       func(*corev1.Pod, *corev1.PersistentVolumeClaim, *unstructured.Unstructured) (*corev1.Pod, error)
 	gk                 schema.GroupKind
 	metrics            *metricsManager
 }
@@ -95,6 +96,7 @@ type controller struct {
 func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, namespace, prefix string,
 	gk schema.GroupKind, gvr schema.GroupVersionResource, mountPath, devicePath string,
 	populatorArgs func(bool, *unstructured.Unstructured) ([]string, error),
+	patchPodFunc func(*corev1.Pod, *corev1.PersistentVolumeClaim, *unstructured.Unstructured) (*corev1.Pod, error),
 ) {
 	klog.Infof("Starting populator controller for %s", gk)
 
@@ -154,6 +156,7 @@ func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, 
 		cleanupMap:         make(map[string]*stringSet),
 		workqueue:          workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		populatorArgs:      populatorArgs,
+		patchPodFunc:       patchPodFunc,
 		gk:                 gk,
 		metrics:            initMetrics(),
 	}
@@ -547,20 +550,10 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				pod.Spec.NodeName = nodeName
 			}
 
-			// TODO: Make volumes, volumeMounts, and serviceAccounts configurable.
-			pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-				Name: "csi-data-dir",
-				VolumeSource: corev1.VolumeSource{
-					HostPath: &corev1.HostPathVolumeSource{
-						Path: "/var/lib/csi-hostpath-data/",
-					},
-				},
-			})
-			con.VolumeMounts = append(con.VolumeMounts, corev1.VolumeMount{
-				Name:      "csi-data-dir",
-				MountPath: "/csi-data-dir",
-			})
-			pod.Spec.ServiceAccountName = "csi-hostpath-transfer-account"
+			pod, err = c.patchPodFunc(pod, pvc, unstructured)
+			if err != nil {
+				return err
+			}
 
 			_, err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Create(ctx, pod, metav1.CreateOptions{})
 			if err != nil {
@@ -788,4 +781,8 @@ func (c *controller) ensureFinalizer(ctx context.Context, pvc *corev1.Persistent
 	}
 
 	return nil
+}
+
+func EmptyPatchPodFunc(pod *corev1.Pod, pvc *corev1.PersistentVolumeClaim, dataSource *unstructured.Unstructured) (*corev1.Pod, error) {
+	return pod, nil
 }
