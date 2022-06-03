@@ -546,6 +546,22 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			if waitForFirstConsumer {
 				pod.Spec.NodeName = nodeName
 			}
+
+			// TODO: Make volumes, volumeMounts, and serviceAccounts configurable.
+			pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+				Name: "csi-data-dir",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/var/lib/csi-hostpath-data/",
+					},
+				},
+			})
+			con.VolumeMounts = append(con.VolumeMounts, corev1.VolumeMount{
+				Name:      "csi-data-dir",
+				MountPath: "/csi-data-dir",
+			})
+			pod.Spec.ServiceAccountName = "csi-hostpath-transfer-account"
+
 			_, err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Create(ctx, pod, metav1.CreateOptions{})
 			if err != nil {
 				return err
