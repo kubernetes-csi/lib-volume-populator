@@ -52,6 +52,7 @@ func main() {
 		showVersion  bool
 		namespace    string
 	)
+	klog.InitFlags(nil)
 	// Main arg
 	flag.StringVar(&mode, "mode", "", "Mode to run in (controller, populate)")
 	// Populate args
