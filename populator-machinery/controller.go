@@ -41,10 +41,13 @@ import (
 	"k8s.io/client-go/dynamic/dynamiclister"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	storagelisters "k8s.io/client-go/listers/storage/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/component-helpers/storage/volume"
 	"k8s.io/klog/v2"
@@ -58,6 +61,13 @@ const (
 	populatedFromAnnoSuffix = "populated-from"
 	pvcFinalizerSuffix      = "populate-target-protection"
 	annSelectedNode         = "volume.kubernetes.io/selected-node"
+	controllerNameSuffix    = "populator"
+
+	reasonPodCreationError   = "PopulatorCreationError"
+	reasonPodCreationSuccess = "PopulatorCreated"
+	reasonPodFailed          = "PopulatorFailed"
+	reasonPodFinished        = "PopulatorFinished"
+	reasonPVCCreationError   = "PopulatorPVCCreationError"
 )
 
 type empty struct{}
@@ -91,6 +101,7 @@ type controller struct {
 	populatorArgs      func(bool, *unstructured.Unstructured) ([]string, error)
 	gk                 schema.GroupKind
 	metrics            *metricsManager
+	recorder           record.EventRecorder
 }
 
 func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, namespace, prefix string,
@@ -157,6 +168,7 @@ func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, 
 		populatorArgs:      populatorArgs,
 		gk:                 gk,
 		metrics:            initMetrics(),
+		recorder:           getRecorder(kubeClient, prefix+"-"+controllerNameSuffix),
 	}
 
 	c.metrics.startListener(httpEndpoint, metricsPath)
@@ -233,6 +245,14 @@ func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, 
 	if err = c.run(stopCh); err != nil {
 		klog.Fatalf("Failed to run controller: %v", err)
 	}
+}
+
+func getRecorder(kubeClient kubernetes.Interface, controllerName string) record.EventRecorder {
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartStructuredLogging(0)
+	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeClient.CoreV1().Events("")})
+	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerName})
+	return recorder
 }
 
 func (c *controller) addNotification(keyToCall, objType, namespace, name string) {
@@ -554,8 +574,10 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			}
 			_, err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Create(ctx, pod, metav1.CreateOptions{})
 			if err != nil {
+				c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodCreationError, "Failed to create populator pod: %s", err)
 				return err
 			}
+			c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPodCreationSuccess, "Populator started")
 
 			// If PVC' doesn't exist yet, create it
 			if pvcPrime == nil {
@@ -578,6 +600,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				}
 				_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(c.populatorNamespace).Create(ctx, pvcPrime, metav1.CreateOptions{})
 				if err != nil {
+					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPVCCreationError, "Failed to create populator PVC: %s", err)
 					return err
 				}
 			}
@@ -588,6 +611,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 		if corev1.PodSucceeded != pod.Status.Phase {
 			if corev1.PodFailed == pod.Status.Phase {
+				c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodFailed, "Populator failed: %s", pod.Status.Message)
 				// Delete failed pods so we can try again
 				err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
 				if err != nil {
@@ -662,6 +686,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	c.metrics.recordMetrics(pvc.UID, "success")
 
 	// *** At this point the volume population is done and we're just cleaning up ***
+	c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPodFinished, "Populator finished")
 
 	// If the pod still exists, delete it
 	if pod != nil {
