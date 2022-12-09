@@ -46,6 +46,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/component-helpers/storage/volume"
 	"k8s.io/klog/v2"
 )
 
@@ -456,6 +457,11 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			return nil
 		}
 
+		if err := c.checkIntreeStorageClass(pvc, storageClass); err != nil {
+			klog.V(2).Infof("Ignoring PVC %s/%s: %s", pvcNamespace, pvcName, err)
+			return nil
+		}
+
 		if storageClass.VolumeBindingMode != nil && storagev1.VolumeBindingWaitForFirstConsumer == *storageClass.VolumeBindingMode {
 			waitForFirstConsumer = true
 			nodeName = pvc.Annotations[annSelectedNode]
@@ -772,4 +778,21 @@ func (c *controller) ensureFinalizer(ctx context.Context, pvc *corev1.Persistent
 	}
 
 	return nil
+}
+
+func (c *controller) checkIntreeStorageClass(pvc *corev1.PersistentVolumeClaim, sc *storagev1.StorageClass) error {
+	if !strings.HasPrefix(sc.Provisioner, "kubernetes.io/") {
+		// This is not an in-tree StorageClass
+		return nil
+	}
+
+	if pvc.Annotations != nil {
+		if migrated := pvc.Annotations[volume.AnnMigratedTo]; migrated != "" {
+			// The PVC is migrated to CSI
+			return nil
+		}
+	}
+
+	// The SC is in-tree & PVC is not migrated
+	return fmt.Errorf("in-tree volume volume plugin %q cannot use volume populator", sc.Provisioner)
 }
