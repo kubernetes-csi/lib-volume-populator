@@ -1,6 +1,6 @@
 module github.com/kubernetes-csi/lib-volume-populator
 
-go 1.18
+go 1.19
 
 require (
 	github.com/prometheus/client_model v0.3.0
@@ -8,8 +8,8 @@ require (
 	k8s.io/api v0.26.0
 	k8s.io/apimachinery v0.26.0
 	k8s.io/client-go v0.26.0
-	k8s.io/component-base v0.25.4
-	k8s.io/component-helpers v0.25.4
+	k8s.io/component-base v0.26.0
+	k8s.io/component-helpers v0.26.0
 	k8s.io/klog/v2 v2.80.1
 )
 
