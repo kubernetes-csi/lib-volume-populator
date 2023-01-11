@@ -587,7 +587,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 						Namespace: c.populatorNamespace,
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						AccessModes:      pvc.Spec.AccessModes,
 						Resources:        pvc.Spec.Resources,
 						StorageClassName: pvc.Spec.StorageClassName,
 						VolumeMode:       pvc.Spec.VolumeMode,
