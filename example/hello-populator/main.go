@@ -41,16 +41,17 @@ var version = "unknown"
 
 func main() {
 	var (
-		mode         string
-		fileName     string
-		fileContents string
-		httpEndpoint string
-		metricsPath  string
-		masterURL    string
-		kubeconfig   string
-		imageName    string
-		showVersion  bool
-		namespace    string
+		mode               string
+		fileName           string
+		fileContents       string
+		httpEndpoint       string
+		metricsPath        string
+		masterURL          string
+		kubeconfig         string
+		imageName          string
+		showVersion        bool
+		namespace          string
+		serviceaccountName string
 	)
 	klog.InitFlags(nil)
 	// Main arg
@@ -68,6 +69,7 @@ func main() {
 	// Other args
 	flag.BoolVar(&showVersion, "version", false, "display the version string")
 	flag.StringVar(&namespace, "namespace", "hello", "Namespace to deploy controller")
+	flag.StringVar(&serviceaccountName, "serviceaccountName", "default", "Service account name used by the populator.")
 	flag.Parse()
 
 	if showVersion {
@@ -88,7 +90,7 @@ func main() {
 			gvr = schema.GroupVersionResource{Group: groupName, Version: apiVersion, Resource: resource}
 		)
 		populator_machinery.RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath,
-			namespace, prefix, gk, gvr, mountPath, devicePath, getPopulatorPodArgs)
+			namespace, prefix, gk, gvr, mountPath, devicePath, getPopulatorPodArgs, serviceaccountName)
 	case "populate":
 		populate(fileName, fileContents)
 	default:

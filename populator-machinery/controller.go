@@ -84,6 +84,7 @@ type controller struct {
 	imageName          string
 	devicePath         string
 	mountPath          string
+	serviceAccountName string
 	pvcLister          corelisters.PersistentVolumeClaimLister
 	pvcSynced          cache.InformerSynced
 	pvLister           corelisters.PersistentVolumeLister
@@ -106,7 +107,7 @@ type controller struct {
 
 func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, namespace, prefix string,
 	gk schema.GroupKind, gvr schema.GroupVersionResource, mountPath, devicePath string,
-	populatorArgs func(bool, *unstructured.Unstructured) ([]string, error),
+	populatorArgs func(bool, *unstructured.Unstructured) ([]string, error), serviceAccountName string,
 ) {
 	klog.Infof("Starting populator controller for %s", gk)
 
@@ -150,6 +151,7 @@ func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, 
 		populatorNamespace: namespace,
 		devicePath:         devicePath,
 		mountPath:          mountPath,
+		serviceAccountName: serviceAccountName,
 		populatedFromAnno:  prefix + "/" + populatedFromAnnoSuffix,
 		pvcFinalizer:       prefix + "/" + pvcFinalizerSuffix,
 		pvcLister:          pvcInformer.Lister(),
@@ -552,7 +554,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 					Name:      podName,
 					Namespace: c.populatorNamespace,
 				},
-				Spec: makePopulatePodSpec(pvcPrimeName),
+				Spec: makePopulatePodSpec(pvcPrimeName, c.serviceAccountName),
 			}
 			pod.Spec.Volumes[0].VolumeSource.PersistentVolumeClaim.ClaimName = pvcPrimeName
 			con := &pod.Spec.Containers[0]
@@ -720,8 +722,9 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	return nil
 }
 
-func makePopulatePodSpec(pvcPrimeName string) corev1.PodSpec {
+func makePopulatePodSpec(pvcPrimeName, serviceAccountName string) corev1.PodSpec {
 	return corev1.PodSpec{
+		ServiceAccountName: serviceAccountName,
 		Containers: []corev1.Container{
 			{
 				Name:            populatorContainerName,
