@@ -42,13 +42,20 @@ import (
 )
 
 type testCase struct {
-	name           string
-	key            string
-	pvcNamespace   string
-	pvcName        string
+	// Name of the test
+	name string
+	// Key added to the notifyMap
+	key          string
+	pvcNamespace string
+	// PVC to be processed
+	pvcName string
+
+	// Object to insert into fake kubeclient/dynClient/gatewayClient before the test starts
 	initialObjects []runtime.Object
+	// Expected errors
 	expectedResult error
-	expectedKeys   []string
+	// Expected keys in the notifyMap
+	expectedKeys []string
 }
 
 const (
@@ -66,6 +73,7 @@ const (
 	testPvName             = "test-pv"
 	testNodeName           = "test-node-name"
 	testPodName            = populatorPodPrefix + "-" + testPvcUid
+	testProvisioner        = "test.provisioner"
 )
 
 var (
@@ -150,7 +158,7 @@ func ust() *unstructured.Unstructured {
 
 func sc() *storagev1.StorageClass {
 	sc := testStorageClassName
-	p := "test.provisioner"
+	p := testProvisioner
 	vbm := storagev1.VolumeBindingWaitForFirstConsumer
 	return &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -306,7 +314,7 @@ func TestSyncPvc(t *testing.T) {
 
 	tests := []testCase{
 		{
-			name:         "Ignore PVCs in working namespace",
+			name:         "Ignore PVCs in controller's working namespace",
 			key:          "pvc/" + testVpWorkingNamespace + "/" + testPvcName,
 			pvcNamespace: testVpWorkingNamespace,
 			pvcName:      testPvcName,
