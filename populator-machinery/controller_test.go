@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright 2024 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -35,7 +35,10 @@ import (
 	"k8s.io/client-go/dynamic/dynamiclister"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubeinformers "k8s.io/client-go/informers"
+	informercorev1 "k8s.io/client-go/informers/core/v1"
+	informerstoragev1 "k8s.io/client-go/informers/storage/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	gatewayfake "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake"
 	gatewayInformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions"
@@ -74,39 +77,6 @@ const (
 	testNodeName           = "test-node-name"
 	testPodName            = populatorPodPrefix + "-" + testPvcUid
 	testProvisioner        = "test.provisioner"
-)
-
-var (
-	gvr = schema.GroupVersionResource{
-		Group:    testApiGroup,
-		Version:  "v1alpha1",
-		Resource: "testdatasources",
-	}
-	gk = schema.GroupKind{
-		Group: testApiGroup,
-		Kind:  testDatasourceKind,
-	}
-
-	kubeClient    = kubefake.NewSimpleClientset()
-	dynClient     = dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
-	gatewayClient = gatewayfake.NewSimpleClientset()
-
-	kubeInformerFactory = kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
-	dynInformerFactory  = dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Second*30)
-
-	pvcInformer  = kubeInformerFactory.Core().V1().PersistentVolumeClaims()
-	pvInformer   = kubeInformerFactory.Core().V1().PersistentVolumes()
-	podInformer  = kubeInformerFactory.Core().V1().Pods()
-	scInformer   = kubeInformerFactory.Storage().V1().StorageClasses()
-	unstInformer = dynInformerFactory.ForResource(gvr).Informer()
-
-	gatewayInformerFactory = gatewayInformers.NewSharedInformerFactory(gatewayClient, time.Second*30)
-	referenceGrants        = gatewayInformerFactory.Gateway().V1beta1().ReferenceGrants()
-
-	populatorArgs = func(b bool, u *unstructured.Unstructured) ([]string, error) {
-		var args []string
-		return args, nil
-	}
 )
 
 func pvc(name, namespace, nodeName, scName, volumeName string, datasourceRef *v1.TypedObjectReference, phase v1.PersistentVolumeClaimPhase) *v1.PersistentVolumeClaim {
@@ -196,8 +166,46 @@ func pv(pvcName, pvcNamespace, pvcUid string) *v1.PersistentVolume {
 	}
 }
 
-func initController() *controller {
-	return &controller{
+func initTest() (
+	*controller,
+	informercorev1.PersistentVolumeClaimInformer,
+	cache.SharedIndexInformer,
+	informerstoragev1.StorageClassInformer,
+	informercorev1.PodInformer,
+	informercorev1.PersistentVolumeInformer,
+) {
+	gvr := schema.GroupVersionResource{
+		Group:    testApiGroup,
+		Version:  "v1alpha1",
+		Resource: "testdatasources",
+	}
+	gk := schema.GroupKind{
+		Group: testApiGroup,
+		Kind:  testDatasourceKind,
+	}
+
+	kubeClient := kubefake.NewSimpleClientset()
+	dynClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	gatewayClient := gatewayfake.NewSimpleClientset()
+
+	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
+	dynInformerFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Second*30)
+
+	pvcInformer := kubeInformerFactory.Core().V1().PersistentVolumeClaims()
+	pvInformer := kubeInformerFactory.Core().V1().PersistentVolumes()
+	podInformer := kubeInformerFactory.Core().V1().Pods()
+	scInformer := kubeInformerFactory.Storage().V1().StorageClasses()
+	unstInformer := dynInformerFactory.ForResource(gvr).Informer()
+
+	gatewayInformerFactory := gatewayInformers.NewSharedInformerFactory(gatewayClient, time.Second*30)
+	referenceGrants := gatewayInformerFactory.Gateway().V1beta1().ReferenceGrants()
+
+	populatorArgs := func(b bool, u *unstructured.Unstructured) ([]string, error) {
+		var args []string
+		return args, nil
+	}
+
+	c := &controller{
 		kubeClient:           kubeClient,
 		imageName:            "",
 		populatorNamespace:   testVpWorkingNamespace,
@@ -225,13 +233,7 @@ func initController() *controller {
 		referenceGrantLister: referenceGrants.Lister(),
 		referenceGrantSynced: referenceGrants.Informer().HasSynced,
 	}
-}
-
-func cleanup() {
-	kubeClient.CoreV1().PersistentVolumeClaims(testPvcNamespace).Delete(context.TODO(), testPvcName, metav1.DeleteOptions{})
-	kubeClient.CoreV1().PersistentVolumeClaims(testVpWorkingNamespace).Delete(context.TODO(), testPopulatorPvcName, metav1.DeleteOptions{})
-	kubeClient.CoreV1().Pods(testVpWorkingNamespace).Delete(context.TODO(), testPodName, metav1.DeleteOptions{})
-	kubeClient.CoreV1().PersistentVolumes().Delete(context.TODO(), testPvName, metav1.DeleteOptions{})
+	return c, pvcInformer, unstInformer, scInformer, podInformer, pvInformer
 }
 
 func compareResult(want error, got error) bool {
@@ -259,11 +261,12 @@ func compareNotifyMap(want []string, got map[string]*stringSet) error {
 func runSyncPvcTests(tests []testCase, t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			c, pvcInformer, unstInformer, scInformer, podInformer, pvInformer := initTest()
 			for _, obj := range test.initialObjects {
 				switch obj.(type) {
 				case *v1.PersistentVolumeClaim:
 					pvc := obj.(*v1.PersistentVolumeClaim)
-					_, err := kubeClient.CoreV1().PersistentVolumeClaims(pvc.ObjectMeta.Namespace).Create(context.TODO(), pvc, metav1.CreateOptions{})
+					_, err := c.kubeClient.CoreV1().PersistentVolumeClaims(pvc.ObjectMeta.Namespace).Create(context.TODO(), pvc, metav1.CreateOptions{})
 					if err != nil {
 						t.Fatalf("Create pvc failed: %s", err.Error())
 					}
@@ -274,14 +277,14 @@ func runSyncPvcTests(tests []testCase, t *testing.T) {
 					scInformer.Informer().GetStore().Add(obj)
 				case *v1.Pod:
 					pod := obj.(*v1.Pod)
-					_, err := kubeClient.CoreV1().Pods(pod.ObjectMeta.Namespace).Create(context.TODO(), pod, metav1.CreateOptions{})
+					_, err := c.kubeClient.CoreV1().Pods(pod.ObjectMeta.Namespace).Create(context.TODO(), pod, metav1.CreateOptions{})
 					if err != nil {
 						t.Fatalf("Create pod failed: %s", err.Error())
 					}
 					podInformer.Informer().GetStore().Add(obj)
 				case *v1.PersistentVolume:
 					pv := obj.(*v1.PersistentVolume)
-					_, err := kubeClient.CoreV1().PersistentVolumes().Create(context.TODO(), pv, metav1.CreateOptions{})
+					_, err := c.kubeClient.CoreV1().PersistentVolumes().Create(context.TODO(), pv, metav1.CreateOptions{})
 					if err != nil {
 						t.Fatalf("Create pv failed: %s", err.Error())
 					}
@@ -291,7 +294,6 @@ func runSyncPvcTests(tests []testCase, t *testing.T) {
 				}
 			}
 
-			c := initController()
 			result := c.syncPvc(context.TODO(), test.key, test.pvcNamespace, test.pvcName)
 			if !compareResult(test.expectedResult, result) {
 				t.Errorf("Error: expected result %t, got %t", test.expectedResult, result)
@@ -300,7 +302,6 @@ func runSyncPvcTests(tests []testCase, t *testing.T) {
 			if err != nil {
 				t.Errorf(err.Error())
 			}
-			cleanup()
 		})
 	}
 }
