@@ -113,6 +113,7 @@ type controller struct {
 	referenceGrantSynced   cache.InformerSynced
 	podConfig              *PodConfig
 	providerFunctionConfig *ProviderFunctionConfig
+	crossNamespace         bool
 }
 
 type VolumePopulatorConfig struct {
@@ -135,6 +136,9 @@ type VolumePopulatorConfig struct {
 	// ProviderFunctionConfig is the configuration for invoking provider functions. Either PodConfig or ProviderFunctionConfig should
 	// be specified. PodConfig and ProviderFunctionConfig can't be provided at the same time
 	ProviderFunctionConfig *ProviderFunctionConfig
+	// CrossNamespace indicates if the populator supports data sources located in namespaces different than the PVC's namespace.
+	// This feature is alpha and requires the populator machinery to process gateway.networking.k8s.io/v1beta1.ReferenceGrant objects
+	CrossNamespace bool
 }
 
 type PodConfig struct {
@@ -269,6 +273,7 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		referenceGrantSynced:   referenceGrants.Informer().HasSynced,
 		podConfig:              vpcfg.PodConfig,
 		providerFunctionConfig: vpcfg.ProviderFunctionConfig,
+		crossNamespace:         vpcfg.CrossNamespace,
 	}
 
 	c.metrics.startListener(vpcfg.HttpEndpoint, vpcfg.MetricsPath)
@@ -341,7 +346,10 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 
 	kubeInformerFactory.Start(stopCh)
 	dynInformerFactory.Start(stopCh)
-	gatewayInformerFactory.Start(stopCh)
+
+	if vpcfg.CrossNamespace {
+		gatewayInformerFactory.Start(stopCh)
+	}
 
 	if err = c.run(stopCh); err != nil {
 		klog.Fatalf("Failed to run controller: %v", err)
@@ -467,7 +475,11 @@ func (c *controller) run(stopCh <-chan struct{}) error {
 	defer utilruntime.HandleCrash()
 	defer c.workqueue.ShutDown()
 
-	ok := cache.WaitForCacheSync(stopCh, c.pvcSynced, c.pvSynced, c.podSynced, c.scSynced, c.unstSynced, c.referenceGrantSynced)
+	synced := []cache.InformerSynced{c.pvcSynced, c.pvSynced, c.podSynced, c.scSynced, c.unstSynced}
+	if c.crossNamespace {
+		synced = append(synced, c.referenceGrantSynced)
+	}
+	ok := cache.WaitForCacheSync(stopCh, synced...)
 	if !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
