@@ -79,6 +79,7 @@ const (
 	reasonPVCCreationError              = "PopulatorPVCPrimeCreationError"
 	reasonWaitForDataPopulationFinished = "PopulatorWaitForDataPopulationFinished"
 	reasonStorageClassCreationError     = "PopulatorStorageClassCreationError"
+	reasonDataSourceNotFound            = "PopulatorDataSourceNotFound"
 )
 
 type empty struct{}
@@ -591,6 +592,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		if !errors.IsNotFound(err) {
 			return err
 		}
+		c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonDataSourceNotFound, "Data source %s/%s not found", dataSourceRefNamespace, dataSourceRef.Name)
 		c.addNotification(key, "unstructured", pvc.Namespace, dataSourceRef.Name)
 		// We'll get called again later when the data source exists
 		return nil
