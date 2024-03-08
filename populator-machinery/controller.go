@@ -58,20 +58,27 @@ import (
 )
 
 const (
-	populatorContainerName  = "populate"
-	populatorPodPrefix      = "populate"
-	populatorPodVolumeName  = "target"
-	populatorPvcPrefix      = "prime"
-	populatedFromAnnoSuffix = "populated-from"
-	pvcFinalizerSuffix      = "populate-target-protection"
-	annSelectedNode         = "volume.kubernetes.io/selected-node"
-	controllerNameSuffix    = "populator"
+	populatorContainerName      = "populate"
+	populatorPodPrefix          = "populate"
+	populatorStorageClassPrefix = "populate"
+	populatorPodVolumeName      = "target"
+	populatorPvcPrefix          = "prime"
+	populatedFromAnnoSuffix     = "populated-from"
+	pvcFinalizerSuffix          = "populate-target-protection"
+	annSelectedNode             = "volume.kubernetes.io/selected-node"
+	controllerNameSuffix        = "populator"
 
-	reasonPodCreationError   = "PopulatorCreationError"
-	reasonPodCreationSuccess = "PopulatorCreated"
-	reasonPodFailed          = "PopulatorFailed"
-	reasonPodFinished        = "PopulatorFinished"
-	reasonPVCCreationError   = "PopulatorPVCCreationError"
+	reasonPodCreationError              = "PopulatorCreationError"
+	reasonPodCreationSuccess            = "PopulatorCreated"
+	reasonPodFailed                     = "PopulatorFailed"
+	reasonPopulatorFinished             = "PopulatorFinished"
+	reasonPopulateOperationStartError   = "PopulateOperationStartError"
+	reasonPopulateOperationStartSuccess = "PopulateOperationStartSuccess"
+	reasonPopulateOperationFailed       = "PopulateOperationFailed"
+	reasonPopulateOperationFinished     = "PopulateOperationFinished"
+	reasonPVCCreationError              = "PopulatorPVCPrimeCreationError"
+	reasonWaitForDataPopulationFinished = "PopulatorWaitForDataPopulationFinished"
+	reasonStorageClassCreationError     = "PopulatorStorageClassCreationError"
 )
 
 type empty struct{}
@@ -81,40 +88,115 @@ type stringSet struct {
 }
 
 type controller struct {
-	populatorNamespace   string
-	populatedFromAnno    string
-	pvcFinalizer         string
-	kubeClient           kubernetes.Interface
-	imageName            string
-	devicePath           string
-	mountPath            string
-	pvcLister            corelisters.PersistentVolumeClaimLister
-	pvcSynced            cache.InformerSynced
-	pvLister             corelisters.PersistentVolumeLister
-	pvSynced             cache.InformerSynced
-	podLister            corelisters.PodLister
-	podSynced            cache.InformerSynced
-	scLister             storagelisters.StorageClassLister
-	scSynced             cache.InformerSynced
-	unstLister           dynamiclister.Lister
-	unstSynced           cache.InformerSynced
-	mu                   sync.Mutex
-	notifyMap            map[string]*stringSet
-	cleanupMap           map[string]*stringSet
-	workqueue            workqueue.RateLimitingInterface
-	populatorArgs        func(bool, *unstructured.Unstructured) ([]string, error)
-	gk                   schema.GroupKind
-	metrics              *metricsManager
-	recorder             record.EventRecorder
-	referenceGrantLister referenceGrantv1beta1.ReferenceGrantLister
-	referenceGrantSynced cache.InformerSynced
+	populatorNamespace     string
+	populatedFromAnno      string
+	pvcFinalizer           string
+	kubeClient             kubernetes.Interface
+	pvcLister              corelisters.PersistentVolumeClaimLister
+	pvcSynced              cache.InformerSynced
+	pvLister               corelisters.PersistentVolumeLister
+	pvSynced               cache.InformerSynced
+	podLister              corelisters.PodLister
+	podSynced              cache.InformerSynced
+	scLister               storagelisters.StorageClassLister
+	scSynced               cache.InformerSynced
+	unstLister             dynamiclister.Lister
+	unstSynced             cache.InformerSynced
+	mu                     sync.Mutex
+	notifyMap              map[string]*stringSet
+	cleanupMap             map[string]*stringSet
+	workqueue              workqueue.RateLimitingInterface
+	gk                     schema.GroupKind
+	metrics                *metricsManager
+	recorder               record.EventRecorder
+	referenceGrantLister   referenceGrantv1beta1.ReferenceGrantLister
+	referenceGrantSynced   cache.InformerSynced
+	podConfig              *PodConfig
+	providerFunctionConfig *ProviderFunctionConfig
+}
+
+type VolumePopulatorConfig struct {
+	// MasterURL is a master url that Kubernetes client config can be built from
+	MasterURL string
+	// Kubeconfig is a kubeconfig filepath that Kubernetes client config can be built from
+	Kubeconfig   string
+	HttpEndpoint string
+	MetricsPath  string
+	// Namespace is the namespace that all populator resources run in
+	Namespace string
+	Prefix    string
+	// Gk is the GroupKind for the CR data source created by user
+	Gk schema.GroupKind
+	// Gvr is the GroupVersionResource for the CR data source created by user
+	Gvr schema.GroupVersionResource
+	// PodConfig is the configuration for creating populator pod. Either PodConfig or ProviderFunctionConfig should
+	// be specified. PodConfig and ProviderFunctionConfig can't be provided at the same time
+	PodConfig *PodConfig
+	// ProviderFunctionConfig is the configuration for invoking provider functions. Either PodConfig or ProviderFunctionConfig should
+	// be specified. PodConfig and ProviderFunctionConfig can't be provided at the same time
+	ProviderFunctionConfig *ProviderFunctionConfig
+}
+
+type PodConfig struct {
+	// ImageName is the container image name
+	ImageName string
+	// MountPath is the path inside of the container at which the volume should be mounted
+	MountPath string
+	// DevicePath is the path inside of the container that the device will be mapped to
+	DevicePath string
+	// PopulatorArgs is the args for the populator pod
+	PopulatorArgs func(bool, *unstructured.Unstructured) ([]string, error)
+}
+
+type ProviderFunctionConfig struct {
+	// PopulateFn is the provider specific data population function
+	PopulateFn func(context.Context, PopulatorParams) error
+	// PopulateCompleteFn is the provider specific data population completeness check function, return true when data transfer gets completed
+	PopulateCompleteFn func(context.Context, PopulatorParams) (bool, error)
+	// PopulateCleanupFn is the provider specific data population cleanup function, cleanup resouces after data population completed
+	PopulateCleanupFn func(context.Context, PopulatorParams) error
+}
+
+// PopulatorParams includes the parameters passing to provider specific functions
+type PopulatorParams struct {
+	KubeClient kubernetes.Interface
+	// Pvc is the original PVC created by user
+	Pvc *corev1.PersistentVolumeClaim
+	// PvcPrime is the temporary PVC created by volume populator
+	PvcPrime *corev1.PersistentVolumeClaim
+	// StorageClass is the original StorageClass Pvc refer to
+	StorageClass *storagev1.StorageClass
+	// Unstructured is the CR data source created by user
+	Unstructured *unstructured.Unstructured
+	Recorder     record.EventRecorder
 }
 
 func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, namespace, prefix string,
 	gk schema.GroupKind, gvr schema.GroupVersionResource, mountPath, devicePath string,
 	populatorArgs func(bool, *unstructured.Unstructured) ([]string, error),
 ) {
-	klog.Infof("Starting populator controller for %s", gk)
+	podConfig := &PodConfig{
+		ImageName:     imageName,
+		MountPath:     mountPath,
+		DevicePath:    devicePath,
+		PopulatorArgs: populatorArgs,
+	}
+	vpcfg := VolumePopulatorConfig{
+		MasterURL:    masterURL,
+		Kubeconfig:   kubeconfig,
+		HttpEndpoint: httpEndpoint,
+		MetricsPath:  metricsPath,
+		Namespace:    namespace,
+		Prefix:       prefix,
+		Gk:           gk,
+		Gvr:          gvr,
+		PodConfig:    podConfig,
+	}
+	RunControllerWithConfig(vpcfg)
+}
+
+func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
+	klog.Infof("Starting populator controller for %s", vpcfg.Gk)
 
 	stopCh := make(chan struct{})
 	sigCh := make(chan os.Signal, 2)
@@ -126,7 +208,7 @@ func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, 
 		os.Exit(1) // second signal. Exit directly.
 	}()
 
-	cfg, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
+	cfg, err := clientcmd.BuildConfigFromFlags(vpcfg.MasterURL, vpcfg.Kubeconfig)
 	if err != nil {
 		klog.Fatalf("Failed to create config: %v", err)
 	}
@@ -153,41 +235,43 @@ func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, 
 	pvInformer := kubeInformerFactory.Core().V1().PersistentVolumes()
 	podInformer := kubeInformerFactory.Core().V1().Pods()
 	scInformer := kubeInformerFactory.Storage().V1().StorageClasses()
-	unstInformer := dynInformerFactory.ForResource(gvr).Informer()
+	unstInformer := dynInformerFactory.ForResource(vpcfg.Gvr).Informer()
 
 	gatewayInformerFactory := gatewayInformers.NewSharedInformerFactory(gatewayClient, time.Second*30)
 	referenceGrants := gatewayInformerFactory.Gateway().V1beta1().ReferenceGrants()
 
-	c := &controller{
-		kubeClient:           kubeClient,
-		imageName:            imageName,
-		populatorNamespace:   namespace,
-		devicePath:           devicePath,
-		mountPath:            mountPath,
-		populatedFromAnno:    prefix + "/" + populatedFromAnnoSuffix,
-		pvcFinalizer:         prefix + "/" + pvcFinalizerSuffix,
-		pvcLister:            pvcInformer.Lister(),
-		pvcSynced:            pvcInformer.Informer().HasSynced,
-		pvLister:             pvInformer.Lister(),
-		pvSynced:             pvInformer.Informer().HasSynced,
-		podLister:            podInformer.Lister(),
-		podSynced:            podInformer.Informer().HasSynced,
-		scLister:             scInformer.Lister(),
-		scSynced:             scInformer.Informer().HasSynced,
-		unstLister:           dynamiclister.New(unstInformer.GetIndexer(), gvr),
-		unstSynced:           unstInformer.HasSynced,
-		notifyMap:            make(map[string]*stringSet),
-		cleanupMap:           make(map[string]*stringSet),
-		workqueue:            workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
-		populatorArgs:        populatorArgs,
-		gk:                   gk,
-		metrics:              initMetrics(),
-		recorder:             getRecorder(kubeClient, prefix+"-"+controllerNameSuffix),
-		referenceGrantLister: referenceGrants.Lister(),
-		referenceGrantSynced: referenceGrants.Informer().HasSynced,
+	if vpcfg.PodConfig != nil && vpcfg.ProviderFunctionConfig != nil {
+		klog.Fatalf("PodConfig and ProviderFunctionConfig can't be provided at the same time")
 	}
 
-	c.metrics.startListener(httpEndpoint, metricsPath)
+	c := &controller{
+		kubeClient:             kubeClient,
+		populatorNamespace:     vpcfg.Namespace,
+		populatedFromAnno:      vpcfg.Prefix + "/" + populatedFromAnnoSuffix,
+		pvcFinalizer:           vpcfg.Prefix + "/" + pvcFinalizerSuffix,
+		pvcLister:              pvcInformer.Lister(),
+		pvcSynced:              pvcInformer.Informer().HasSynced,
+		pvLister:               pvInformer.Lister(),
+		pvSynced:               pvInformer.Informer().HasSynced,
+		podLister:              podInformer.Lister(),
+		podSynced:              podInformer.Informer().HasSynced,
+		scLister:               scInformer.Lister(),
+		scSynced:               scInformer.Informer().HasSynced,
+		unstLister:             dynamiclister.New(unstInformer.GetIndexer(), vpcfg.Gvr),
+		unstSynced:             unstInformer.HasSynced,
+		notifyMap:              make(map[string]*stringSet),
+		cleanupMap:             make(map[string]*stringSet),
+		workqueue:              workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		gk:                     vpcfg.Gk,
+		metrics:                initMetrics(),
+		recorder:               getRecorder(kubeClient, vpcfg.Prefix+"-"+controllerNameSuffix),
+		referenceGrantLister:   referenceGrants.Lister(),
+		referenceGrantSynced:   referenceGrants.Informer().HasSynced,
+		podConfig:              vpcfg.PodConfig,
+		providerFunctionConfig: vpcfg.ProviderFunctionConfig,
+	}
+
+	c.metrics.startListener(vpcfg.HttpEndpoint, vpcfg.MetricsPath)
 	defer c.metrics.stopListener()
 
 	pvcInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -420,6 +504,11 @@ func (c *controller) runWorker() {
 		}
 		if err != nil {
 			c.workqueue.AddRateLimited(key)
+			// err == reasonWaitForDataPopulationFinished when populateCompleteFn return false. This is not an actual error
+			// It's to force requeue the PVC
+			if err.Error() == reasonWaitForDataPopulationFinished {
+				return nil
+			}
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
 		c.workqueue.Forget(obj)
@@ -497,10 +586,10 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 	var waitForFirstConsumer bool
 	var nodeName string
+	var storageClass *storagev1.StorageClass
 	if pvc.Spec.StorageClassName != nil {
 		storageClassName := *pvc.Spec.StorageClassName
 
-		var storageClass *storagev1.StorageClass
 		storageClass, err = c.scLister.Get(storageClassName)
 		if err != nil {
 			if !errors.IsNotFound(err) {
@@ -527,13 +616,15 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	}
 
 	// Look for the populator pod
-	podName := fmt.Sprintf("%s-%s", populatorPodPrefix, pvc.UID)
-	c.addNotification(key, "pod", c.populatorNamespace, podName)
 	var pod *corev1.Pod
-	pod, err = c.podLister.Pods(c.populatorNamespace).Get(podName)
-	if err != nil {
-		if !errors.IsNotFound(err) {
-			return err
+	podName := fmt.Sprintf("%s-%s", populatorPodPrefix, pvc.UID)
+	if c.podConfig != nil {
+		c.addNotification(key, "pod", c.populatorNamespace, podName)
+		pod, err = c.podLister.Pods(c.populatorNamespace).Get(podName)
+		if err != nil {
+			if !errors.IsNotFound(err) {
+				return err
+			}
 		}
 	}
 
@@ -549,8 +640,42 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	}
 
 	// *** Here is the first place we start to create/modify objects ***
+	// TODO: Handle PVC' update while the original PVC changed
+	// If the PVC is unbound and PVC' doesn't exist yet, create PVC'
+	if "" == pvc.Spec.VolumeName && pvcPrime == nil {
+		pvcPrime = &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvcPrimeName,
+				Namespace: c.populatorNamespace,
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      pvc.Spec.AccessModes,
+				Resources:        pvc.Spec.Resources,
+				StorageClassName: pvc.Spec.StorageClassName,
+				VolumeMode:       pvc.Spec.VolumeMode,
+			},
+		}
+		if waitForFirstConsumer {
+			pvcPrime.Annotations = map[string]string{
+				annSelectedNode: nodeName,
+			}
+		}
+		pvcPrime, err = c.kubeClient.CoreV1().PersistentVolumeClaims(c.populatorNamespace).Create(ctx, pvcPrime, metav1.CreateOptions{})
+		if err != nil {
+			c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPVCCreationError, "Failed to create populator PVC prime: %s", err)
+			return err
+		}
+	}
 
 	// If the PVC is unbound, we need to perform the population
+	params := &PopulatorParams{
+		KubeClient:   c.kubeClient,
+		StorageClass: storageClass,
+		Pvc:          pvc,
+		PvcPrime:     pvcPrime,
+		Unstructured: unstructured,
+		Recorder:     c.recorder,
+	}
 	if "" == pvc.Spec.VolumeName {
 
 		// Ensure the PVC has a finalizer on it so we can clean up the stuff we create
@@ -559,101 +684,110 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			return err
 		}
 
+		// TODO: Distinguish between using populator pod or provider functions
 		// Record start time for populator metric
 		c.metrics.operationStart(pvc.UID)
 
-		// If the pod doesn't exist yet, create it
-		if pod == nil {
-			var rawBlock bool
-			if nil != pvc.Spec.VolumeMode && corev1.PersistentVolumeBlock == *pvc.Spec.VolumeMode {
-				rawBlock = true
-			}
+		// If use provider specific implementation, invoke the populateFn() and the PopulateCompleteFn() functions.
+		if c.providerFunctionConfig != nil {
+			if c.providerFunctionConfig.PopulateFn != nil {
 
-			// Calculate the args for the populator pod
-			var args []string
-			args, err = c.populatorArgs(rawBlock, unstructured)
-			if err != nil {
-				return err
-			}
-
-			// Make the pod
-			pod = &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      podName,
-					Namespace: c.populatorNamespace,
-				},
-				Spec: makePopulatePodSpec(pvcPrimeName),
-			}
-			pod.Spec.Volumes[0].VolumeSource.PersistentVolumeClaim.ClaimName = pvcPrimeName
-			con := &pod.Spec.Containers[0]
-			con.Image = c.imageName
-			con.Args = args
-			if rawBlock {
-				con.VolumeDevices = []corev1.VolumeDevice{
-					{
-						Name:       populatorPodVolumeName,
-						DevicePath: c.devicePath,
-					},
+				if "" == pvcPrime.Spec.VolumeName {
+					// We'll get called again later when the pvc prime gets bounded
+					return nil
 				}
-			} else {
-				con.VolumeMounts = []corev1.VolumeMount{
-					{
-						Name:      populatorPodVolumeName,
-						MountPath: c.mountPath,
-					},
-				}
-			}
-			if waitForFirstConsumer {
-				pod.Spec.NodeName = nodeName
-			}
-			_, err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Create(ctx, pod, metav1.CreateOptions{})
-			if err != nil {
-				c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodCreationError, "Failed to create populator pod: %s", err)
-				return err
-			}
-			c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPodCreationSuccess, "Populator started")
-
-			// If PVC' doesn't exist yet, create it
-			if pvcPrime == nil {
-				pvcPrime = &corev1.PersistentVolumeClaim{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      pvcPrimeName,
-						Namespace: c.populatorNamespace,
-					},
-					Spec: corev1.PersistentVolumeClaimSpec{
-						AccessModes:      pvc.Spec.AccessModes,
-						Resources:        pvc.Spec.Resources,
-						StorageClassName: pvc.Spec.StorageClassName,
-						VolumeMode:       pvc.Spec.VolumeMode,
-					},
-				}
-				if waitForFirstConsumer {
-					pvcPrime.Annotations = map[string]string{
-						annSelectedNode: nodeName,
-					}
-				}
-				_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(c.populatorNamespace).Create(ctx, pvcPrime, metav1.CreateOptions{})
+				err := c.providerFunctionConfig.PopulateFn(ctx, *params)
 				if err != nil {
-					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPVCCreationError, "Failed to create populator PVC: %s", err)
+					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPopulateOperationStartError, "Failed to start populate operation: %s", err)
 					return err
 				}
+				c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPopulateOperationStartSuccess, "Populate operation started")
 			}
 
-			// We'll get called again later when the pod exists
-			return nil
+			if c.providerFunctionConfig.PopulateCompleteFn != nil {
+				complete, err := c.providerFunctionConfig.PopulateCompleteFn(ctx, *params)
+				if err != nil {
+					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPopulateOperationFailed, "Population operation failed: %s", err.Error())
+					return err
+				}
+				if !complete {
+					//TODO: Revisited if there is a better way to requeue pvc than return an error
+					// Return error to force reque pvc. We'll get called again later when the population operation complete
+					return fmt.Errorf(reasonWaitForDataPopulationFinished)
+				}
+				c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPopulateOperationFinished, "Populate operation finished")
+			}
 		}
 
-		if corev1.PodSucceeded != pod.Status.Phase {
-			if corev1.PodFailed == pod.Status.Phase {
-				c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodFailed, "Populator failed: %s", pod.Status.Message)
-				// Delete failed pods so we can try again
-				err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+		// If use populator pod, processed with pod creation and pod succeeded check
+		if c.podConfig != nil {
+			// If the pod doesn't exist yet, create it
+			if pod == nil {
+				var rawBlock bool
+				if nil != pvc.Spec.VolumeMode && corev1.PersistentVolumeBlock == *pvc.Spec.VolumeMode {
+					rawBlock = true
+				}
+
+				// Calculate the args for the populator pod
+				var args []string
+				args, err = c.podConfig.PopulatorArgs(rawBlock, unstructured)
 				if err != nil {
 					return err
 				}
+
+				// Make the pod
+				pod = &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      podName,
+						Namespace: c.populatorNamespace,
+					},
+					Spec: makePopulatePodSpec(pvcPrimeName),
+				}
+				pod.Spec.Volumes[0].VolumeSource.PersistentVolumeClaim.ClaimName = pvcPrimeName
+				con := &pod.Spec.Containers[0]
+				con.Image = c.podConfig.ImageName
+				con.Args = args
+				if rawBlock {
+					con.VolumeDevices = []corev1.VolumeDevice{
+						{
+							Name:       populatorPodVolumeName,
+							DevicePath: c.podConfig.DevicePath,
+						},
+					}
+				} else {
+					con.VolumeMounts = []corev1.VolumeMount{
+						{
+							Name:      populatorPodVolumeName,
+							MountPath: c.podConfig.MountPath,
+						},
+					}
+				}
+				if waitForFirstConsumer {
+					pod.Spec.NodeName = nodeName
+				}
+				_, err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Create(ctx, pod, metav1.CreateOptions{})
+				if err != nil {
+					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodCreationError, "Failed to create populator pod: %s", err)
+					return err
+				}
+				c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPodCreationSuccess, "Populator started")
+
+				// We'll get called again later when the pod exists
+				return nil
 			}
-			// We'll get called again later when the pod succeeds
-			return nil
+
+			if corev1.PodSucceeded != pod.Status.Phase {
+				if corev1.PodFailed == pod.Status.Phase {
+					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodFailed, "Populator failed: %s", pod.Status.Message)
+					// Delete failed pods so we can try again
+					err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+					if err != nil {
+						return err
+					}
+				}
+				// We'll get called again later when the pod succeeds
+				return nil
+			}
 		}
 
 		// This would be bad
@@ -720,13 +854,23 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	c.metrics.recordMetrics(pvc.UID, "success")
 
 	// *** At this point the volume population is done and we're just cleaning up ***
-	c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPodFinished, "Populator finished")
+	c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPopulatorFinished, "Populator finished")
 
-	// If the pod still exists, delete it
-	if pod != nil {
-		err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+	// If use provider specific implementation, invoke the populateCleanupFn() function.
+	if c.providerFunctionConfig != nil && c.providerFunctionConfig.PopulateCleanupFn != nil {
+		err = c.providerFunctionConfig.PopulateCleanupFn(ctx, *params)
 		if err != nil {
 			return err
+		}
+	}
+	// If use populator pod,  clean it up as needed.
+	if c.podConfig != nil {
+		// If the pod still exists, delete it
+		if pod != nil {
+			err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+			if err != nil {
+				return err
+			}
 		}
 	}
 
