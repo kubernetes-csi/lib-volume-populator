@@ -140,6 +140,12 @@ type VolumePopulatorConfig struct {
 	// CrossNamespace indicates if the populator supports data sources located in namespaces different than the PVC's namespace.
 	// This feature is alpha and requires the populator machinery to process gateway.networking.k8s.io/v1beta1.ReferenceGrant objects
 	CrossNamespace bool
+	// StopCh is an optional channel you can provide to override the controller's default internal stop channel. In either case, sending
+	// an os.Interrupt or syscall.SIGTERM signal will initiate a graceful shutdown of the controller, by closing the stop channel
+	// (whichever one is used). If the graceful shutdown fails (a second signal is received), the controller will abruptly exit with a
+	// status code of 1. Specify this channel when an external process needs to manage the controller's life-cycle (i.e. a process needs
+	// to manually close the stop channel).
+	StopCh chan struct{}
 }
 
 type PodConfig struct {
@@ -206,6 +212,9 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 	klog.Infof("Starting populator controller for %s", vpcfg.Gk)
 
 	stopCh := make(chan struct{})
+	if vpcfg.StopCh != nil {
+		stopCh = vpcfg.StopCh
+	}
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
