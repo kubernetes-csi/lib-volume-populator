@@ -112,7 +112,7 @@ type controller struct {
 	recorder               record.EventRecorder
 	referenceGrantLister   referenceGrantv1beta1.ReferenceGrantLister
 	referenceGrantSynced   cache.InformerSynced
-	podConfig              *PodConfig
+	podConfig              PodSpecFactory
 	providerFunctionConfig *ProviderFunctionConfig
 	crossNamespace         bool
 }
@@ -133,7 +133,7 @@ type VolumePopulatorConfig struct {
 	Gvr schema.GroupVersionResource
 	// PodConfig is the configuration for creating populator pod. Either PodConfig or ProviderFunctionConfig should
 	// be specified. PodConfig and ProviderFunctionConfig can't be provided at the same time
-	PodConfig *PodConfig
+	PodConfig PodSpecFactory
 	// ProviderFunctionConfig is the configuration for invoking provider functions. Either PodConfig or ProviderFunctionConfig should
 	// be specified. PodConfig and ProviderFunctionConfig can't be provided at the same time
 	ProviderFunctionConfig *ProviderFunctionConfig
@@ -146,6 +146,10 @@ type VolumePopulatorConfig struct {
 	// status code of 1. Specify this channel when an external process needs to manage the controller's life-cycle (i.e. a process needs
 	// to manually close the stop channel).
 	StopCh chan struct{}
+}
+
+type PodSpecFactory interface {
+	MakePopulatePodSpec(pvcPrimeName string, rawBlock bool, unstructured *unstructured.Unstructured) (*corev1.PodSpec, error)
 }
 
 type PodConfig struct {
@@ -759,9 +763,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 					rawBlock = true
 				}
 
-				// Calculate the args for the populator pod
-				var args []string
-				args, err = c.podConfig.PopulatorArgs(rawBlock, unstructured)
+				podSpec, err := c.podConfig.MakePopulatePodSpec(pvcPrimeName, rawBlock, unstructured)
 				if err != nil {
 					return err
 				}
@@ -772,26 +774,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 						Name:      podName,
 						Namespace: c.populatorNamespace,
 					},
-					Spec: makePopulatePodSpec(pvcPrimeName),
-				}
-				pod.Spec.Volumes[0].VolumeSource.PersistentVolumeClaim.ClaimName = pvcPrimeName
-				con := &pod.Spec.Containers[0]
-				con.Image = c.podConfig.ImageName
-				con.Args = args
-				if rawBlock {
-					con.VolumeDevices = []corev1.VolumeDevice{
-						{
-							Name:       populatorPodVolumeName,
-							DevicePath: c.podConfig.DevicePath,
-						},
-					}
-				} else {
-					con.VolumeMounts = []corev1.VolumeMount{
-						{
-							Name:      populatorPodVolumeName,
-							MountPath: c.podConfig.MountPath,
-						},
-					}
+					Spec: *podSpec,
 				}
 				if waitForFirstConsumer {
 					pod.Spec.NodeName = nodeName
@@ -925,13 +908,40 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	return nil
 }
 
-func makePopulatePodSpec(pvcPrimeName string) corev1.PodSpec {
-	return corev1.PodSpec{
-		Containers: []corev1.Container{
+func (pc *PodConfig) MakePopulatePodSpec(pvcPrimeName string, rawBlock bool, unstructured *unstructured.Unstructured) (*corev1.PodSpec, error) {
+	// Calculate the args for the populator pod
+	var args []string
+	args, err := pc.PopulatorArgs(rawBlock, unstructured)
+	if err != nil {
+		return nil, err
+	}
+
+	con := corev1.Container{
+		Name:            populatorContainerName,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           pc.ImageName,
+		Args:            args,
+	}
+
+	if rawBlock {
+		con.VolumeDevices = []corev1.VolumeDevice{
 			{
-				Name:            populatorContainerName,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				Name:       populatorPodVolumeName,
+				DevicePath: pc.DevicePath,
 			},
+		}
+	} else {
+		con.VolumeMounts = []corev1.VolumeMount{
+			{
+				Name:      populatorPodVolumeName,
+				MountPath: pc.MountPath,
+			},
+		}
+	}
+
+	return &corev1.PodSpec{
+		Containers: []corev1.Container{
+			con,
 		},
 		RestartPolicy: corev1.RestartPolicyNever,
 		Volumes: []corev1.Volume{
@@ -944,7 +954,7 @@ func makePopulatePodSpec(pvcPrimeName string) corev1.PodSpec {
 				},
 			},
 		},
-	}
+	}, nil
 }
 
 func (c *controller) ensureFinalizer(ctx context.Context, pvc *corev1.PersistentVolumeClaim, finalizer string, want bool) error {
