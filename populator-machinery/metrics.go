@@ -23,9 +23,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/types"
-	k8smetrics "k8s.io/component-base/metrics"
 	"k8s.io/klog/v2"
+
+	k8smetrics "k8s.io/component-base/metrics"
 )
 
 const (
@@ -168,4 +172,79 @@ func (m *metricsManager) recordMetrics(pvcUID types.UID, result string) {
 
 	delete(m.cache, pvcUID)
 	m.opInFlight.Set(float64(len(m.cache)))
+}
+
+// prometheusMetricsManager is designed to manage Prometheus metrics related to population operations.
+type prometheusMetricsManager struct {
+	// opErrorCount is a Prometheus counter to track the number of errors encountered during operations
+	opErrorCount *prometheus.CounterVec
+	// opRequestCount is a Prometheus counter to track the total number of operation requests received.
+	opRequestCount *prometheus.CounterVec
+	// opSuccessCount is a Prometheus counter to track the total number of successful operations.
+	opSuccessCount *prometheus.CounterVec
+}
+
+// initPrometheusMetrics initializes a `prometheusMetricsManager` struct for tracking
+// metrics related to "populator operations" using Prometheus.
+func initPrometheusMetrics() *prometheusMetricsManager {
+	pm := new(prometheusMetricsManager)
+
+	pm.opErrorCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "volume_population_error_count",
+			Help: "Number of failed volume populator operations",
+		},
+		[]string{"method", "pvc_uid", "error_code"},
+	)
+
+	pm.opRequestCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "volume_population_count",
+			Help: "Number of total volume populator operations requests",
+		},
+		[]string{"pvc_uid"},
+	)
+
+	pm.opSuccessCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "volume_population_success_count",
+			Help: "Number of successful volume populator operations",
+		},
+		[]string{"pvc_uid"},
+	)
+
+	prometheus.MustRegister(pm.opErrorCount)
+	prometheus.MustRegister(pm.opRequestCount)
+	prometheus.MustRegister(pm.opSuccessCount)
+
+	return pm
+}
+
+// recordError is responsible for recording errors that occur during operations and updating the corresponding Prometheus metric.
+func (pm *prometheusMetricsManager) recordError(method string, pvcUID types.UID, err error) {
+	internalErr, _ := status.FromError(err)
+	code := internalErr.Code().String()
+	pm.opErrorCount.WithLabelValues(method, string(pvcUID), code).Inc()
+}
+
+// recordRequest is responsible for recording requests that occur during operations and updating the corresponding Prometheus metric.
+func (pm *prometheusMetricsManager) recordRequest(pvcUID types.UID) {
+	pm.opRequestCount.WithLabelValues(string(pvcUID)).Inc()
+}
+
+// recordSuccess is responsible for recording successes that occur during operations and updating the corresponding Prometheus metric.
+func (pm *prometheusMetricsManager) recordSuccess(pvcUID types.UID) {
+	pm.opSuccessCount.WithLabelValues(string(pvcUID)).Inc()
+}
+
+// startListener initiates an HTTP server to expose Prometheus metrics.
+func (pm *prometheusMetricsManager) startListener(httpEndpoint, metricsPath string) {
+	if "" == httpEndpoint || "" == metricsPath {
+		return
+	}
+
+	http.Handle(metricsPath, promhttp.Handler())
+	go http.ListenAndServe(httpEndpoint, nil)
+
+	klog.Infof("Prometheus metrics http server successfully started on %s, %s", httpEndpoint, metricsPath)
 }

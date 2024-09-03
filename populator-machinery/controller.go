@@ -109,6 +109,7 @@ type controller struct {
 	workqueue              workqueue.RateLimitingInterface
 	gk                     schema.GroupKind
 	metrics                *metricsManager
+	prometheusMetrics      *prometheusMetricsManager
 	recorder               record.EventRecorder
 	referenceGrantLister   referenceGrantv1beta1.ReferenceGrantLister
 	referenceGrantSynced   cache.InformerSynced
@@ -124,6 +125,10 @@ type VolumePopulatorConfig struct {
 	Kubeconfig   string
 	HttpEndpoint string
 	MetricsPath  string
+	// PrometheusHttpEndpoint is the metrics endpoint where Prometheus metrics will be emitted to
+	PrometheusHttpEndpoint string
+	// PrometheusHttpEndpoint is the metrics path where Prometheus metrics will be emitted to
+	PrometheusMetricsPath string
 	// Namespace is the namespace that all populator resources run in
 	Namespace string
 	Prefix    string
@@ -280,6 +285,7 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		workqueue:              workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		gk:                     vpcfg.Gk,
 		metrics:                initMetrics(),
+		prometheusMetrics:      initPrometheusMetrics(),
 		recorder:               getRecorder(kubeClient, vpcfg.Prefix+"-"+controllerNameSuffix),
 		referenceGrantLister:   referenceGrants.Lister(),
 		referenceGrantSynced:   referenceGrants.Informer().HasSynced,
@@ -290,6 +296,8 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 
 	c.metrics.startListener(vpcfg.HttpEndpoint, vpcfg.MetricsPath)
 	defer c.metrics.stopListener()
+
+	c.prometheusMetrics.startListener(vpcfg.PrometheusHttpEndpoint, vpcfg.PrometheusMetricsPath)
 
 	pvcInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: c.handlePVC,
@@ -515,13 +523,21 @@ func (c *controller) runWorker() {
 		}
 		var err error
 		parts := strings.Split(key, "/")
+		var pvc *corev1.PersistentVolumeClaim
 		switch parts[0] {
 		case "pvc":
 			if len(parts) != 3 {
 				utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 				return nil
 			}
-			err = c.syncPvc(context.TODO(), key, parts[1], parts[2])
+			pvcNamespace := parts[1]
+			pvcName := parts[2]
+			pvc, err = c.pvcLister.PersistentVolumeClaims(pvcNamespace).Get(pvcName)
+			if err != nil {
+				return err
+			}
+			c.prometheusMetrics.recordRequest(pvc.UID)
+			err = c.syncPvc(context.TODO(), key, pvcNamespace, pvcName)
 		default:
 			utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 			return nil
@@ -533,6 +549,7 @@ func (c *controller) runWorker() {
 			if err.Error() == reasonWaitForDataPopulationFinished {
 				return nil
 			}
+			c.prometheusMetrics.recordError("controller.syncPvc", pvc.UID, err)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
 		c.workqueue.Forget(obj)
@@ -921,6 +938,9 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 	// Clean up our internal callback maps
 	c.cleanupNotifications(key)
+
+	// Record the population as a successful operation
+	c.prometheusMetrics.recordSuccess(pvc.UID)
 
 	return nil
 }

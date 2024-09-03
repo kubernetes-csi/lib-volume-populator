@@ -26,15 +26,25 @@ import (
 	"testing"
 	"time"
 
-	cmg "github.com/prometheus/client_model/go"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/types"
+
+	cmg "github.com/prometheus/client_model/go"
 )
 
 const (
 	httpPattern            = "/metrics"
 	addr                   = "localhost:0"
 	processStartTimeMetric = "process_start_time_seconds"
+	operation              = "test_operation_name"
+	pvcUID                 = "pvc_uid42"
+)
+
+var (
+	internalErr = status.Error(codes.Internal, "an internal error occurred")
 )
 
 func initMgr() *metricsManager {
@@ -334,4 +344,103 @@ func TestProcessStartTimeMetricExist(t *testing.T) {
 	}
 
 	t.Fatalf("Metrics does not contain %v. Scraped content: %v", processStartTimeMetric, metricsFamilies)
+}
+
+// opResult represents a population operation result
+type opResult int
+
+const (
+	// Success represents a successful population operation result
+	Success opResult = iota
+	// Error represents a failed population operation result with an error
+	Error
+	// Request represents a population operation request
+	Request
+)
+
+func TestPrometheusMetrics(t *testing.T) {
+	tests := []struct {
+		name              string
+		opResults         []opResult
+		expectedRequests  int
+		expectedSuccesses int
+		expectedErrors    int
+	}{
+		{
+			name:              "empty counters",
+			opResults:         []opResult{},
+			expectedRequests:  0,
+			expectedSuccesses: 0,
+			expectedErrors:    0,
+		},
+		{
+			name: "counters work",
+			opResults: []opResult{
+				Request,
+				Success,
+				Success,
+				Error,
+				Error,
+				Error,
+			},
+			expectedRequests:  1,
+			expectedSuccesses: 2,
+			expectedErrors:    3,
+		},
+	}
+
+	pm := initPrometheusMetrics()
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pm.opErrorCount.Reset()
+			pm.opSuccessCount.Reset()
+			pm.opRequestCount.Reset()
+
+			for _, opResult := range test.opResults {
+				switch opResult {
+				case Request:
+					pm.recordRequest(pvcUID)
+				case Success:
+					pm.recordSuccess(pvcUID)
+				case Error:
+					pm.recordError(operation, pvcUID, internalErr)
+				}
+			}
+
+			validatePrometheusMetric(t, pm.opErrorCount.WithLabelValues(operation, pvcUID, codes.Internal.String()), test.expectedErrors)
+			validatePrometheusMetric(t, pm.opSuccessCount.WithLabelValues(pvcUID), test.expectedSuccesses)
+			validatePrometheusMetric(t, pm.opRequestCount.WithLabelValues(pvcUID), test.expectedRequests)
+		})
+	}
+}
+
+// getCountFromPrometheusCounterMetric gets the count value from a Prometheus counter metric
+func getCountFromPrometheusCounterMetric(metric prometheus.Counter) (int, error) {
+	reg := prometheus.NewPedanticRegistry()
+	if err := reg.Register(metric); err != nil {
+		return 0, err
+	}
+	metrics, err := reg.Gather()
+	if err != nil {
+		return 0, err
+	}
+
+	// Should only be 1 metrics family with 1 metric.
+	if len(metrics) != 1 || len(metrics[0].Metric) != 1 || metrics[0].Metric[0].Counter == nil || metrics[0].Metric[0].Counter.Value == nil {
+		return 0, fmt.Errorf("Unexpected metrics state = %v", metrics)
+	}
+	return int(*metrics[0].Metric[0].Counter.Value), nil
+}
+
+// validatePrometheusMetrics is a helper function to validate a Prometheus metric counter with an expected count
+func validatePrometheusMetric(t *testing.T, metric prometheus.Counter, expectedCount int) {
+	t.Helper()
+	count, err := getCountFromPrometheusCounterMetric(metric)
+	if err != nil {
+		t.Fatalf("failed getCountFromCounterMetric: %v", err)
+	}
+	if count != expectedCount {
+		t.Fatalf("failed validating metric count, expected %v, got %v", expectedCount, count)
+	}
 }
