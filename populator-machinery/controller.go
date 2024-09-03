@@ -115,6 +115,7 @@ type controller struct {
 	podConfig              *PodConfig
 	providerFunctionConfig *ProviderFunctionConfig
 	crossNamespace         bool
+	providerMetricManager  *ProviderMetricManager
 }
 
 type VolumePopulatorConfig struct {
@@ -137,6 +138,8 @@ type VolumePopulatorConfig struct {
 	// ProviderFunctionConfig is the configuration for invoking provider functions. Either PodConfig or ProviderFunctionConfig should
 	// be specified. PodConfig and ProviderFunctionConfig can't be provided at the same time
 	ProviderFunctionConfig *ProviderFunctionConfig
+	// ProviderMetricManager is the manager for provider specific metric handling
+	ProviderMetricManager *ProviderMetricManager
 	// CrossNamespace indicates if the populator supports data sources located in namespaces different than the PVC's namespace.
 	// This feature is alpha and requires the populator machinery to process gateway.networking.k8s.io/v1beta1.ReferenceGrant objects
 	CrossNamespace bool
@@ -286,6 +289,7 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		podConfig:              vpcfg.PodConfig,
 		providerFunctionConfig: vpcfg.ProviderFunctionConfig,
 		crossNamespace:         vpcfg.CrossNamespace,
+		providerMetricManager:  vpcfg.ProviderMetricManager,
 	}
 
 	c.metrics.startListener(vpcfg.HttpEndpoint, vpcfg.MetricsPath)
@@ -525,6 +529,14 @@ func (c *controller) runWorker() {
 		default:
 			utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 			return nil
+		}
+		if c.providerMetricManager != nil {
+			syncPvcMethod := "controller.syncPvc"
+			if err != nil && err.Error() == reasonWaitForDataPopulationFinished {
+				c.providerMetricManager.handleVolumePopulationMetric(syncPvcMethod, nil)
+			} else {
+				c.providerMetricManager.handleVolumePopulationMetric(syncPvcMethod, err)
+			}
 		}
 		if err != nil {
 			c.workqueue.AddRateLimited(key)
