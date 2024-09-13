@@ -35,6 +35,11 @@ const (
 	httpPattern            = "/metrics"
 	addr                   = "localhost:0"
 	processStartTimeMetric = "process_start_time_seconds"
+	testMethod             = "controller.syncPvc"
+)
+
+var (
+	testError = fmt.Errorf("an internal error has occurred")
 )
 
 func initMgr() *metricsManager {
@@ -334,4 +339,38 @@ func TestProcessStartTimeMetricExist(t *testing.T) {
 	}
 
 	t.Fatalf("Metrics does not contain %v. Scraped content: %v", processStartTimeMetric, metricsFamilies)
+}
+
+// TestProviderMetricManager verifies that the ProviderMetricManager can correctly handle
+// metrics of different types using the `HandleMetricFn` function.
+func TestProviderMetricManager(t *testing.T) {
+	type vpMetricLabels struct {
+		method string
+		err    error
+	}
+
+	var vpMetric *VolumePopulationMetric
+
+	pm := ProviderMetricManager{
+		HandleMetricFn: func(metric ProviderMetric) error {
+			switch mType := metric.(type) {
+			case *VolumePopulationMetric:
+				vpMetric = metric.(*VolumePopulationMetric)
+			default:
+				return fmt.Errorf("Unknown metric type: %v", mType)
+			}
+			return nil
+		},
+	}
+
+	pm.handleVolumePopulationMetric(testMethod, testError)
+
+	expVpMetric := &VolumePopulationMetric{
+		Method: testMethod,
+		Error:  testError,
+	}
+
+	if !reflect.DeepEqual(vpMetric, expVpMetric) {
+		t.Errorf("Test failed. Expected %+v, got: %+v for VolumePopulationMetric", expVpMetric, vpMetric)
+	}
 }
