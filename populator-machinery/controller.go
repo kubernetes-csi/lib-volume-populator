@@ -32,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
@@ -46,6 +47,7 @@ import (
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	storagelisters "k8s.io/client-go/listers/storage/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/record"
@@ -232,7 +234,9 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		klog.Fatalf("Failed to create config: %v", err)
 	}
 
-	kubeClient, err := kubernetes.NewForConfig(cfg)
+	coreCfg := rest.CopyConfig(cfg)
+	coreCfg.ContentType = runtime.ContentTypeProtobuf
+	kubeClient, err := kubernetes.NewForConfig(coreCfg)
 	if err != nil {
 		klog.Fatalf("Failed to create client: %v", err)
 	}
