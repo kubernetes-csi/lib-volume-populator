@@ -20,13 +20,15 @@ package fake
 
 import (
 	"context"
+	json "encoding/json"
+	"fmt"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
+	apisv1alpha2 "sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1alpha2"
 	v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
@@ -36,9 +38,9 @@ type FakeTLSRoutes struct {
 	ns   string
 }
 
-var tlsroutesResource = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tlsroutes"}
+var tlsroutesResource = v1alpha2.SchemeGroupVersion.WithResource("tlsroutes")
 
-var tlsroutesKind = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "TLSRoute"}
+var tlsroutesKind = v1alpha2.SchemeGroupVersion.WithKind("TLSRoute")
 
 // Get takes name of the tLSRoute, and returns the corresponding tLSRoute object, and an error if there is any.
 func (c *FakeTLSRoutes) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha2.TLSRoute, err error) {
@@ -134,6 +136,51 @@ func (c *FakeTLSRoutes) DeleteCollection(ctx context.Context, opts v1.DeleteOpti
 func (c *FakeTLSRoutes) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha2.TLSRoute, err error) {
 	obj, err := c.Fake.
 		Invokes(testing.NewPatchSubresourceAction(tlsroutesResource, c.ns, name, pt, data, subresources...), &v1alpha2.TLSRoute{})
+
+	if obj == nil {
+		return nil, err
+	}
+	return obj.(*v1alpha2.TLSRoute), err
+}
+
+// Apply takes the given apply declarative configuration, applies it and returns the applied tLSRoute.
+func (c *FakeTLSRoutes) Apply(ctx context.Context, tLSRoute *apisv1alpha2.TLSRouteApplyConfiguration, opts v1.ApplyOptions) (result *v1alpha2.TLSRoute, err error) {
+	if tLSRoute == nil {
+		return nil, fmt.Errorf("tLSRoute provided to Apply must not be nil")
+	}
+	data, err := json.Marshal(tLSRoute)
+	if err != nil {
+		return nil, err
+	}
+	name := tLSRoute.Name
+	if name == nil {
+		return nil, fmt.Errorf("tLSRoute.Name must be provided to Apply")
+	}
+	obj, err := c.Fake.
+		Invokes(testing.NewPatchSubresourceAction(tlsroutesResource, c.ns, *name, types.ApplyPatchType, data), &v1alpha2.TLSRoute{})
+
+	if obj == nil {
+		return nil, err
+	}
+	return obj.(*v1alpha2.TLSRoute), err
+}
+
+// ApplyStatus was generated because the type contains a Status member.
+// Add a +genclient:noStatus comment above the type to avoid generating ApplyStatus().
+func (c *FakeTLSRoutes) ApplyStatus(ctx context.Context, tLSRoute *apisv1alpha2.TLSRouteApplyConfiguration, opts v1.ApplyOptions) (result *v1alpha2.TLSRoute, err error) {
+	if tLSRoute == nil {
+		return nil, fmt.Errorf("tLSRoute provided to Apply must not be nil")
+	}
+	data, err := json.Marshal(tLSRoute)
+	if err != nil {
+		return nil, err
+	}
+	name := tLSRoute.Name
+	if name == nil {
+		return nil, fmt.Errorf("tLSRoute.Name must be provided to Apply")
+	}
+	obj, err := c.Fake.
+		Invokes(testing.NewPatchSubresourceAction(tlsroutesResource, c.ns, *name, types.ApplyPatchType, data, "status"), &v1alpha2.TLSRoute{})
 
 	if obj == nil {
 		return nil, err
