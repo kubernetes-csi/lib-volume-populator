@@ -18,14 +18,15 @@ package populator_machinery
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,10 +49,10 @@ type testCase struct {
 	// Name of the test
 	name string
 	// Key added to the notifyMap
-	key          string
-	pvcNamespace string
+	key string
 	// PVC to be processed
-	pvcName string
+	pvcName      string
+	pvcNamespace string
 
 	// Object to insert into fake kubeclient/dynClient/gatewayClient before the test starts
 	initialObjects []runtime.Object
@@ -61,16 +62,24 @@ type testCase struct {
 	populateFn func(context.Context, PopulatorParams) error
 	// Provider specific data population completeness check function, return true when data transfer gets completed.
 	populateCompleteFn func(context.Context, PopulatorParams) (bool, error)
+	// PvcPrimeMutator is the mutator function for pvcPrime
+	pvcPrimeMutator func(PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error)
 	// Expected errors
 	expectedResult error
 	// Expected keys in the notifyMap
 	expectedKeys []string
 	// Expected objects after the test runs
-	expectedObjects []runtime.Object
+	expectedObjects vpObjects
+}
+
+// vpObjects includes the objects we want to compare after tests run
+type vpObjects struct {
+	pvcPrime *corev1.PersistentVolumeClaim
 }
 
 const (
 	testPrefix                         = "volume.populator.test"
+	testMutatorSuffix                  = "mutate"
 	testVpWorkingNamespace             = "test"
 	testPvcNamespace                   = "default"
 	testPvcName                        = "test-pvc"
@@ -87,6 +96,7 @@ const (
 	testProvisioner                    = "test.provisioner"
 	testPopulationOperationStartFailed = "Test populate operation start failed"
 	testPopulateCompleteFailed         = "Test populate operation complete failed"
+	testMutatePVCPrimeFailed           = "Test mutate pvcPrime failed"
 	dataSourceKey                      = "unstructured/" + testPvcNamespace + "/" + testDataSourceName
 	storageClassKey                    = "sc/" + testStorageClassName
 	podKey                             = "pod/" + testVpWorkingNamespace + "/" + testPodName
@@ -94,7 +104,7 @@ const (
 	pvKey                              = "pv/" + testPvName
 )
 
-func pvc(name, namespace, nodeName, scName, volumeName string, datasourceRef *v1.TypedObjectReference, phase v1.PersistentVolumeClaimPhase) *v1.PersistentVolumeClaim {
+func pvc(name, namespace, nodeName, scName, volumeName string, datasourceRef *v1.TypedObjectReference, phase v1.PersistentVolumeClaimPhase, accessMode v1.PersistentVolumeAccessMode) *v1.PersistentVolumeClaim {
 	return &v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -107,7 +117,7 @@ func pvc(name, namespace, nodeName, scName, volumeName string, datasourceRef *v1
 		},
 		Spec: v1.PersistentVolumeClaimSpec{
 			AccessModes: []v1.PersistentVolumeAccessMode{
-				v1.ReadWriteOnce,
+				accessMode,
 			},
 			StorageClassName: &scName,
 			VolumeName:       volumeName,
@@ -204,7 +214,21 @@ func populateCompleteSuccess(ctx context.Context, p PopulatorParams) (bool, erro
 	return true, nil
 }
 
-func initTest(populatorArgs func(b bool, u *unstructured.Unstructured) ([]string, error), populateFn func(context.Context, PopulatorParams) error, populateCompleteFn func(context.Context, PopulatorParams) (bool, error)) (
+func pvcPrimeMutateAccessModeRWX(mp PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error) {
+	accessMode := v1.ReadWriteMany
+	mp.PvcPrime.Spec.AccessModes[0] = accessMode
+	return mp.PvcPrime, nil
+}
+
+func pvcPrimeMutateError(mp PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error) {
+	return mp.PvcPrime, fmt.Errorf(testMutatePVCPrimeFailed)
+}
+
+func pvcPrimeMutatePVCPrimeNil(mp PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error) {
+	return nil, nil
+}
+
+func initTest(test testCase) (
 	*controller,
 	informercorev1.PersistentVolumeClaimInformer,
 	cache.SharedIndexInformer,
@@ -239,20 +263,27 @@ func initTest(populatorArgs func(b bool, u *unstructured.Unstructured) ([]string
 	referenceGrants := gatewayInformerFactory.Gateway().V1beta1().ReferenceGrants()
 
 	var podConfig *PodConfig
-	if populatorArgs != nil {
+	if test.populatorArgs != nil {
 		podConfig = &PodConfig{
 			ImageName:     "",
 			DevicePath:    "",
 			MountPath:     "",
-			PopulatorArgs: populatorArgs,
+			PopulatorArgs: test.populatorArgs,
 		}
 	}
 
 	var providerFunctionConfig *ProviderFunctionConfig
-	if populateFn != nil || populateCompleteFn != nil {
+	if test.populateFn != nil || test.populateCompleteFn != nil {
 		providerFunctionConfig = &ProviderFunctionConfig{
-			PopulateFn:         populateFn,
-			PopulateCompleteFn: populateCompleteFn,
+			PopulateFn:         test.populateFn,
+			PopulateCompleteFn: test.populateCompleteFn,
+		}
+	}
+
+	var mutatorConfig *MutatorConfig
+	if test.pvcPrimeMutator != nil {
+		mutatorConfig = &MutatorConfig{
+			PvcPrimeMutator: test.pvcPrimeMutator,
 		}
 	}
 
@@ -281,6 +312,7 @@ func initTest(populatorArgs func(b bool, u *unstructured.Unstructured) ([]string
 		referenceGrantSynced:   referenceGrants.Informer().HasSynced,
 		podConfig:              podConfig,
 		providerFunctionConfig: providerFunctionConfig,
+		mutatorConfig:          mutatorConfig,
 	}
 	return c, pvcInformer, unstInformer, scInformer, podInformer, pvInformer
 }
@@ -307,10 +339,23 @@ func compareNotifyMap(want []string, got map[string]*stringSet) error {
 	return nil
 }
 
+func compareObjects(want *vpObjects, got *vpObjects) error {
+	if (want == nil && got != nil) || (want != nil && got == nil) {
+		return fmt.Errorf("Expected vpObjects is different from actual vpObjects. Expected %+v, actual %+v", want, got)
+	}
+	if want.pvcPrime != nil {
+		if !reflect.DeepEqual(want.pvcPrime.Spec.AccessModes, got.pvcPrime.Spec.AccessModes) {
+			return fmt.Errorf("Expected pvcPrime accessModes is different from actual pvcPrime accessModes. Expected %+v, actual %+v",
+				want.pvcPrime.Spec.AccessModes, got.pvcPrime.Spec.AccessModes)
+		}
+	}
+	return nil
+}
+
 func runSyncPvcTests(tests []testCase, t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			c, pvcInformer, unstInformer, scInformer, podInformer, pvInformer := initTest(test.populatorArgs, test.populateFn, test.populateCompleteFn)
+			c, pvcInformer, unstInformer, scInformer, podInformer, pvInformer := initTest(test)
 			for _, obj := range test.initialObjects {
 				switch obj.(type) {
 				case *v1.PersistentVolumeClaim:
@@ -349,7 +394,23 @@ func runSyncPvcTests(tests []testCase, t *testing.T) {
 			}
 			err := compareNotifyMap(test.expectedKeys, c.notifyMap)
 			if err != nil {
-				t.Errorf(err.Error())
+				t.Errorf("Compare notifyMap failed, error: %+v", err.Error())
+			}
+			actualPvcPrime, err := c.kubeClient.CoreV1().PersistentVolumeClaims(testVpWorkingNamespace).Get(context.TODO(), testPvcPrimeName, metav1.GetOptions{})
+			if err != nil {
+				if !errors.IsNotFound(err) {
+					t.Errorf("Get pvcPrime failed, error: %+v", err.Error())
+				}
+			}
+			var actualObjects vpObjects
+			if actualPvcPrime != nil {
+				actualObjects = vpObjects{
+					pvcPrime: actualPvcPrime,
+				}
+			}
+			err = compareObjects(&test.expectedObjects, &actualObjects)
+			if err != nil {
+				t.Errorf("Compare vpObjects failed, error: %+v", err.Error())
 			}
 		})
 	}
@@ -364,7 +425,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testVpWorkingNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testVpWorkingNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testVpWorkingNamespace), "", v1.ReadWriteOnce),
 			},
 			populatorArgs:  populatorArgs,
 			expectedResult: nil,
@@ -385,7 +446,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			key:            "pvc/" + testPvcNamespace + "/" + testPvcName,
 			pvcNamespace:   testPvcNamespace,
 			pvcName:        testPvcName,
-			initialObjects: []runtime.Object{pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "", nil, "")},
+			initialObjects: []runtime.Object{pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "", nil, "", v1.ReadWriteOnce)},
 			populatorArgs:  populatorArgs,
 			expectedResult: nil,
 			expectedKeys:   []string{},
@@ -397,7 +458,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf("test.api.group1", testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf("test.api.group1", testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			populatorArgs:  populatorArgs,
 			expectedResult: nil,
@@ -410,7 +471,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, "TestKind1", testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, "TestKind1", testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			populatorArgs:  populatorArgs,
 			expectedResult: nil,
@@ -423,7 +484,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, "", testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, "", testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			populatorArgs:  populatorArgs,
 			expectedResult: nil,
@@ -436,10 +497,10 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, "default1"), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, "default1"), "", v1.ReadWriteOnce),
 			},
 			populatorArgs:  populatorArgs,
-			expectedResult: errors.New("accessing default1/test-data-source-name of TestKind dataSource from default/test-pvc isn't allowed"),
+			expectedResult: fmt.Errorf("accessing default1/test-data-source-name of TestKind dataSource from default/test-pvc isn't allowed"),
 			expectedKeys:   []string{},
 		},
 		{
@@ -449,7 +510,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			populatorArgs:  populatorArgs,
 			expectedResult: nil,
@@ -462,7 +523,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 			},
 			populatorArgs:  populatorArgs,
@@ -476,7 +537,7 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 			},
@@ -485,19 +546,69 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			expectedKeys:   []string{},
 		},
 		{
+			name:         "Create pvcPrime mutate succeeded",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+			},
+			populatorArgs:   populatorArgs,
+			pvcPrimeMutator: pvcPrimeMutateAccessModeRWX,
+			expectedResult:  nil,
+			expectedKeys:    []string{podKey, pvcPrimeKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteMany)},
+		},
+		{
+			name:         "Create pvcPrime mutate error",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+			},
+			populatorArgs:   populatorArgs,
+			pvcPrimeMutator: pvcPrimeMutateError,
+			expectedResult:  fmt.Errorf(testMutatePVCPrimeFailed),
+			expectedKeys:    []string{podKey, pvcPrimeKey},
+		},
+		{
+			name:         "Create pvcPrime mutate, return pvcPrime nil",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+			},
+			populatorArgs:   populatorArgs,
+			pvcPrimeMutator: pvcPrimeMutatePVCPrimeNil,
+			expectedResult:  fmt.Errorf("pvcPrime must not be nil"),
+			expectedKeys:    []string{podKey, pvcPrimeKey},
+		},
+		{
 			name:         "Create populator pod",
 			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
 			pvcNamespace: testPvcNamespace,
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 			},
-			populatorArgs:  populatorArgs,
-			expectedResult: nil,
-			expectedKeys:   []string{podKey, pvcPrimeKey},
+			populatorArgs:   populatorArgs,
+			expectedResult:  nil,
+			expectedKeys:    []string{podKey, pvcPrimeKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Wait populator pod succeed",
@@ -506,14 +617,15 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 				pod(corev1.PodRunning),
 			},
-			populatorArgs:  populatorArgs,
-			expectedResult: nil,
-			expectedKeys:   []string{podKey, pvcPrimeKey},
+			populatorArgs:   populatorArgs,
+			expectedResult:  nil,
+			expectedKeys:    []string{podKey, pvcPrimeKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Populator pod failed",
@@ -522,14 +634,15 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 				pod(corev1.PodFailed),
 			},
-			populatorArgs:  populatorArgs,
-			expectedResult: nil,
-			expectedKeys:   []string{podKey, pvcPrimeKey},
+			populatorArgs:   populatorArgs,
+			expectedResult:  nil,
+			expectedKeys:    []string{podKey, pvcPrimeKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "PV not exists",
@@ -538,15 +651,16 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 				pod(corev1.PodSucceeded),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, ""),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce),
 			},
-			populatorArgs:  populatorArgs,
-			expectedResult: nil,
-			expectedKeys:   []string{podKey, pvcPrimeKey, pvKey},
+			populatorArgs:   populatorArgs,
+			expectedResult:  nil,
+			expectedKeys:    []string{podKey, pvcPrimeKey, pvKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Wait for the bind controller to rebind the PV",
@@ -555,16 +669,17 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 				pod(corev1.PodSucceeded),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, ""),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce),
 				pv(testPvcName, testPvcNamespace, testPvcUid),
 			},
-			populatorArgs:  populatorArgs,
-			expectedResult: nil,
-			expectedKeys:   []string{podKey, pvcPrimeKey, pvKey},
+			populatorArgs:   populatorArgs,
+			expectedResult:  nil,
+			expectedKeys:    []string{podKey, pvcPrimeKey, pvKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Clean up populator pod and pvcPrime",
@@ -573,11 +688,11 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 				pod(corev1.PodSucceeded),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimLost),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimLost, v1.ReadWriteOnce),
 				pv(testPvcName, testPvcNamespace, testPvcUid),
 			},
 			populatorArgs:  populatorArgs,
@@ -598,7 +713,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testVpWorkingNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testVpWorkingNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testVpWorkingNamespace), "", v1.ReadWriteOnce),
 			},
 			expectedResult: nil,
 			expectedKeys:   []string{},
@@ -617,7 +732,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			key:            "pvc/" + testPvcNamespace + "/" + testPvcName,
 			pvcNamespace:   testPvcNamespace,
 			pvcName:        testPvcName,
-			initialObjects: []runtime.Object{pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "", nil, "")},
+			initialObjects: []runtime.Object{pvc(testPvcName, testPvcNamespace, testNodeName, testStorageClassName, "", nil, "", v1.ReadWriteOnce)},
 			expectedResult: nil,
 			expectedKeys:   []string{},
 		},
@@ -628,7 +743,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf("test.api.group1", testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf("test.api.group1", testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			expectedResult: nil,
 			expectedKeys:   []string{},
@@ -640,7 +755,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, "TestKind1", testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, "TestKind1", testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			expectedResult: nil,
 			expectedKeys:   []string{},
@@ -652,7 +767,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, "", testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, "", testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			expectedResult: nil,
 			expectedKeys:   []string{},
@@ -664,9 +779,9 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, "default1"), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, "default1"), "", v1.ReadWriteOnce),
 			},
-			expectedResult: errors.New("accessing default1/test-data-source-name of TestKind dataSource from default/test-pvc isn't allowed"),
+			expectedResult: fmt.Errorf("accessing default1/test-data-source-name of TestKind dataSource from default/test-pvc isn't allowed"),
 			expectedKeys:   []string{},
 		},
 		{
@@ -676,7 +791,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 			},
 			expectedResult: nil,
 			expectedKeys:   []string{dataSourceKey},
@@ -688,7 +803,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 			},
 			expectedResult: nil,
@@ -701,7 +816,7 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingWaitForFirstConsumer),
 			},
@@ -709,20 +824,69 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			expectedKeys:   []string{},
 		},
 		{
-			name:         "Create PVC prime",
+			name:         "Create pvcPrime",
 			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
 			pvcNamespace: testPvcNamespace,
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, "", nil, corev1.ClaimPending),
 			},
-			populateFn:     populateOperationStartError,
-			expectedResult: nil,
-			expectedKeys:   []string{pvcPrimeKey},
+			populateFn:      populateOperationStartError,
+			expectedResult:  nil,
+			expectedKeys:    []string{pvcPrimeKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
+		},
+		{
+			name:         "Create pvcPrime mutate succeeded",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+			},
+			pvcPrimeMutator: pvcPrimeMutateAccessModeRWX,
+			populateFn:      populateOperationStartError,
+			expectedResult:  nil,
+			expectedKeys:    []string{pvcPrimeKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteMany)},
+		},
+		{
+			name:         "Create pvcPrime mutate error",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+			},
+			pvcPrimeMutator: pvcPrimeMutateError,
+			populateFn:      populateOperationStartError,
+			expectedResult:  fmt.Errorf(testMutatePVCPrimeFailed),
+			expectedKeys:    []string{pvcPrimeKey},
+		},
+		{
+			name:         "Create pvcPrime mutate, return pvcPrime nil",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+			},
+			pvcPrimeMutator: pvcPrimeMutatePVCPrimeNil,
+			populateFn:      populateOperationStartError,
+			expectedResult:  fmt.Errorf("pvcPrime must not be nil"),
+			expectedKeys:    []string{pvcPrimeKey},
 		},
 		{
 			name:         "Populate operation start return an error",
@@ -731,15 +895,16 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimBound),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimBound, v1.ReadWriteOnce),
 				pv(testPvcName, testPvcNamespace, testPvcUid),
 			},
-			populateFn:     populateOperationStartError,
-			expectedResult: fmt.Errorf(testPopulationOperationStartFailed),
-			expectedKeys:   []string{pvcPrimeKey},
+			populateFn:      populateOperationStartError,
+			expectedResult:  fmt.Errorf(testPopulationOperationStartFailed),
+			expectedKeys:    []string{pvcPrimeKey},
+			expectedObjects: vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Populate completeness check return an error",
@@ -748,16 +913,17 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimBound),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimBound, v1.ReadWriteOnce),
 				pv(testPvcName, testPvcNamespace, testPvcUid),
 			},
 			populateFn:         PopulateOperationStartSuccess,
 			populateCompleteFn: populateCompleteError,
 			expectedResult:     fmt.Errorf(testPopulateCompleteFailed),
 			expectedKeys:       []string{pvcPrimeKey},
+			expectedObjects:    vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Populate not complete",
@@ -766,16 +932,17 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimBound),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimBound, v1.ReadWriteOnce),
 				pv(testPvcName, testPvcNamespace, testPvcUid),
 			},
 			populateFn:         PopulateOperationStartSuccess,
 			populateCompleteFn: populateNotComplete,
 			expectedResult:     fmt.Errorf(reasonWaitForDataPopulationFinished),
 			expectedKeys:       []string{pvcPrimeKey},
+			expectedObjects:    vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Wait for the bind controller to rebind the PV",
@@ -784,16 +951,17 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, ""),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce),
 				pv(testPvcName, testPvcNamespace, testPvcUid),
 			},
 			populateFn:         PopulateOperationStartSuccess,
 			populateCompleteFn: populateCompleteSuccess,
 			expectedResult:     nil,
 			expectedKeys:       []string{pvcPrimeKey, pvKey},
+			expectedObjects:    vpObjects{pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, "", v1.ReadWriteOnce)},
 		},
 		{
 			name:         "Clean up pvcPrime",
@@ -802,10 +970,10 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 			pvcName:      testPvcName,
 			initialObjects: []runtime.Object{
 				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "",
-					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), ""),
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
-				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimLost),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, nil, corev1.ClaimLost, v1.ReadWriteOnce),
 				pv(testPvcName, testPvcNamespace, testPvcUid),
 			},
 			populateFn:         PopulateOperationStartSuccess,
