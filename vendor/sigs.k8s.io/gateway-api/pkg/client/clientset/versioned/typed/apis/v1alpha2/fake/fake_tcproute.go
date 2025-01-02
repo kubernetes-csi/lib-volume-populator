@@ -20,13 +20,15 @@ package fake
 
 import (
 	"context"
+	json "encoding/json"
+	"fmt"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
+	apisv1alpha2 "sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1alpha2"
 	v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
@@ -36,9 +38,9 @@ type FakeTCPRoutes struct {
 	ns   string
 }
 
-var tcproutesResource = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tcproutes"}
+var tcproutesResource = v1alpha2.SchemeGroupVersion.WithResource("tcproutes")
 
-var tcproutesKind = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "TCPRoute"}
+var tcproutesKind = v1alpha2.SchemeGroupVersion.WithKind("TCPRoute")
 
 // Get takes name of the tCPRoute, and returns the corresponding tCPRoute object, and an error if there is any.
 func (c *FakeTCPRoutes) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha2.TCPRoute, err error) {
@@ -134,6 +136,51 @@ func (c *FakeTCPRoutes) DeleteCollection(ctx context.Context, opts v1.DeleteOpti
 func (c *FakeTCPRoutes) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha2.TCPRoute, err error) {
 	obj, err := c.Fake.
 		Invokes(testing.NewPatchSubresourceAction(tcproutesResource, c.ns, name, pt, data, subresources...), &v1alpha2.TCPRoute{})
+
+	if obj == nil {
+		return nil, err
+	}
+	return obj.(*v1alpha2.TCPRoute), err
+}
+
+// Apply takes the given apply declarative configuration, applies it and returns the applied tCPRoute.
+func (c *FakeTCPRoutes) Apply(ctx context.Context, tCPRoute *apisv1alpha2.TCPRouteApplyConfiguration, opts v1.ApplyOptions) (result *v1alpha2.TCPRoute, err error) {
+	if tCPRoute == nil {
+		return nil, fmt.Errorf("tCPRoute provided to Apply must not be nil")
+	}
+	data, err := json.Marshal(tCPRoute)
+	if err != nil {
+		return nil, err
+	}
+	name := tCPRoute.Name
+	if name == nil {
+		return nil, fmt.Errorf("tCPRoute.Name must be provided to Apply")
+	}
+	obj, err := c.Fake.
+		Invokes(testing.NewPatchSubresourceAction(tcproutesResource, c.ns, *name, types.ApplyPatchType, data), &v1alpha2.TCPRoute{})
+
+	if obj == nil {
+		return nil, err
+	}
+	return obj.(*v1alpha2.TCPRoute), err
+}
+
+// ApplyStatus was generated because the type contains a Status member.
+// Add a +genclient:noStatus comment above the type to avoid generating ApplyStatus().
+func (c *FakeTCPRoutes) ApplyStatus(ctx context.Context, tCPRoute *apisv1alpha2.TCPRouteApplyConfiguration, opts v1.ApplyOptions) (result *v1alpha2.TCPRoute, err error) {
+	if tCPRoute == nil {
+		return nil, fmt.Errorf("tCPRoute provided to Apply must not be nil")
+	}
+	data, err := json.Marshal(tCPRoute)
+	if err != nil {
+		return nil, err
+	}
+	name := tCPRoute.Name
+	if name == nil {
+		return nil, fmt.Errorf("tCPRoute.Name must be provided to Apply")
+	}
+	obj, err := c.Fake.
+		Invokes(testing.NewPatchSubresourceAction(tcproutesResource, c.ns, *name, types.ApplyPatchType, data, "status"), &v1alpha2.TCPRoute{})
 
 	if obj == nil {
 		return nil, err
