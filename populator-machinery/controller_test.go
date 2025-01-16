@@ -399,6 +399,7 @@ func runSyncPvcTests(tests []testCase, t *testing.T) {
 			actualPvcPrime, err := c.kubeClient.CoreV1().PersistentVolumeClaims(testVpWorkingNamespace).Get(context.TODO(), testPvcPrimeName, metav1.GetOptions{})
 			if err != nil {
 				if !errors.IsNotFound(err) {
+					// Trigger tests upstream
 					t.Errorf("Get pvcPrime failed, error: %+v", err.Error())
 				}
 			}
