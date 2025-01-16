@@ -349,7 +349,7 @@ func runSyncPvcTests(tests []testCase, t *testing.T) {
 			}
 			err := compareNotifyMap(test.expectedKeys, c.notifyMap)
 			if err != nil {
-				t.Errorf(err.Error())
+				t.Errorf("%v", err.Error())
 			}
 		})
 	}
