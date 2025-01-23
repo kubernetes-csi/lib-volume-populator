@@ -20,12 +20,15 @@ package fake
 
 import (
 	"context"
+	json "encoding/json"
+	"fmt"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
+	apisv1beta1 "sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1beta1"
 	v1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
@@ -40,20 +43,22 @@ var gatewayclassesKind = v1beta1.SchemeGroupVersion.WithKind("GatewayClass")
 
 // Get takes name of the gatewayClass, and returns the corresponding gatewayClass object, and an error if there is any.
 func (c *FakeGatewayClasses) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1beta1.GatewayClass, err error) {
+	emptyResult := &v1beta1.GatewayClass{}
 	obj, err := c.Fake.
-		Invokes(testing.NewRootGetAction(gatewayclassesResource, name), &v1beta1.GatewayClass{})
+		Invokes(testing.NewRootGetActionWithOptions(gatewayclassesResource, name, options), emptyResult)
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 	return obj.(*v1beta1.GatewayClass), err
 }
 
 // List takes label and field selectors, and returns the list of GatewayClasses that match those selectors.
 func (c *FakeGatewayClasses) List(ctx context.Context, opts v1.ListOptions) (result *v1beta1.GatewayClassList, err error) {
+	emptyResult := &v1beta1.GatewayClassList{}
 	obj, err := c.Fake.
-		Invokes(testing.NewRootListAction(gatewayclassesResource, gatewayclassesKind, opts), &v1beta1.GatewayClassList{})
+		Invokes(testing.NewRootListActionWithOptions(gatewayclassesResource, gatewayclassesKind, opts), emptyResult)
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 
 	label, _, _ := testing.ExtractFromListOptions(opts)
@@ -72,36 +77,39 @@ func (c *FakeGatewayClasses) List(ctx context.Context, opts v1.ListOptions) (res
 // Watch returns a watch.Interface that watches the requested gatewayClasses.
 func (c *FakeGatewayClasses) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 	return c.Fake.
-		InvokesWatch(testing.NewRootWatchAction(gatewayclassesResource, opts))
+		InvokesWatch(testing.NewRootWatchActionWithOptions(gatewayclassesResource, opts))
 }
 
 // Create takes the representation of a gatewayClass and creates it.  Returns the server's representation of the gatewayClass, and an error, if there is any.
 func (c *FakeGatewayClasses) Create(ctx context.Context, gatewayClass *v1beta1.GatewayClass, opts v1.CreateOptions) (result *v1beta1.GatewayClass, err error) {
+	emptyResult := &v1beta1.GatewayClass{}
 	obj, err := c.Fake.
-		Invokes(testing.NewRootCreateAction(gatewayclassesResource, gatewayClass), &v1beta1.GatewayClass{})
+		Invokes(testing.NewRootCreateActionWithOptions(gatewayclassesResource, gatewayClass, opts), emptyResult)
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 	return obj.(*v1beta1.GatewayClass), err
 }
 
 // Update takes the representation of a gatewayClass and updates it. Returns the server's representation of the gatewayClass, and an error, if there is any.
 func (c *FakeGatewayClasses) Update(ctx context.Context, gatewayClass *v1beta1.GatewayClass, opts v1.UpdateOptions) (result *v1beta1.GatewayClass, err error) {
+	emptyResult := &v1beta1.GatewayClass{}
 	obj, err := c.Fake.
-		Invokes(testing.NewRootUpdateAction(gatewayclassesResource, gatewayClass), &v1beta1.GatewayClass{})
+		Invokes(testing.NewRootUpdateActionWithOptions(gatewayclassesResource, gatewayClass, opts), emptyResult)
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 	return obj.(*v1beta1.GatewayClass), err
 }
 
 // UpdateStatus was generated because the type contains a Status member.
 // Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeGatewayClasses) UpdateStatus(ctx context.Context, gatewayClass *v1beta1.GatewayClass, opts v1.UpdateOptions) (*v1beta1.GatewayClass, error) {
+func (c *FakeGatewayClasses) UpdateStatus(ctx context.Context, gatewayClass *v1beta1.GatewayClass, opts v1.UpdateOptions) (result *v1beta1.GatewayClass, err error) {
+	emptyResult := &v1beta1.GatewayClass{}
 	obj, err := c.Fake.
-		Invokes(testing.NewRootUpdateSubresourceAction(gatewayclassesResource, "status", gatewayClass), &v1beta1.GatewayClass{})
+		Invokes(testing.NewRootUpdateSubresourceActionWithOptions(gatewayclassesResource, "status", gatewayClass, opts), emptyResult)
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 	return obj.(*v1beta1.GatewayClass), err
 }
@@ -115,7 +123,7 @@ func (c *FakeGatewayClasses) Delete(ctx context.Context, name string, opts v1.De
 
 // DeleteCollection deletes a collection of objects.
 func (c *FakeGatewayClasses) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
-	action := testing.NewRootDeleteCollectionAction(gatewayclassesResource, listOpts)
+	action := testing.NewRootDeleteCollectionActionWithOptions(gatewayclassesResource, opts, listOpts)
 
 	_, err := c.Fake.Invokes(action, &v1beta1.GatewayClassList{})
 	return err
@@ -123,10 +131,56 @@ func (c *FakeGatewayClasses) DeleteCollection(ctx context.Context, opts v1.Delet
 
 // Patch applies the patch and returns the patched gatewayClass.
 func (c *FakeGatewayClasses) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1beta1.GatewayClass, err error) {
+	emptyResult := &v1beta1.GatewayClass{}
 	obj, err := c.Fake.
-		Invokes(testing.NewRootPatchSubresourceAction(gatewayclassesResource, name, pt, data, subresources...), &v1beta1.GatewayClass{})
+		Invokes(testing.NewRootPatchSubresourceActionWithOptions(gatewayclassesResource, name, pt, data, opts, subresources...), emptyResult)
 	if obj == nil {
+		return emptyResult, err
+	}
+	return obj.(*v1beta1.GatewayClass), err
+}
+
+// Apply takes the given apply declarative configuration, applies it and returns the applied gatewayClass.
+func (c *FakeGatewayClasses) Apply(ctx context.Context, gatewayClass *apisv1beta1.GatewayClassApplyConfiguration, opts v1.ApplyOptions) (result *v1beta1.GatewayClass, err error) {
+	if gatewayClass == nil {
+		return nil, fmt.Errorf("gatewayClass provided to Apply must not be nil")
+	}
+	data, err := json.Marshal(gatewayClass)
+	if err != nil {
 		return nil, err
+	}
+	name := gatewayClass.Name
+	if name == nil {
+		return nil, fmt.Errorf("gatewayClass.Name must be provided to Apply")
+	}
+	emptyResult := &v1beta1.GatewayClass{}
+	obj, err := c.Fake.
+		Invokes(testing.NewRootPatchSubresourceActionWithOptions(gatewayclassesResource, *name, types.ApplyPatchType, data, opts.ToPatchOptions()), emptyResult)
+	if obj == nil {
+		return emptyResult, err
+	}
+	return obj.(*v1beta1.GatewayClass), err
+}
+
+// ApplyStatus was generated because the type contains a Status member.
+// Add a +genclient:noStatus comment above the type to avoid generating ApplyStatus().
+func (c *FakeGatewayClasses) ApplyStatus(ctx context.Context, gatewayClass *apisv1beta1.GatewayClassApplyConfiguration, opts v1.ApplyOptions) (result *v1beta1.GatewayClass, err error) {
+	if gatewayClass == nil {
+		return nil, fmt.Errorf("gatewayClass provided to Apply must not be nil")
+	}
+	data, err := json.Marshal(gatewayClass)
+	if err != nil {
+		return nil, err
+	}
+	name := gatewayClass.Name
+	if name == nil {
+		return nil, fmt.Errorf("gatewayClass.Name must be provided to Apply")
+	}
+	emptyResult := &v1beta1.GatewayClass{}
+	obj, err := c.Fake.
+		Invokes(testing.NewRootPatchSubresourceActionWithOptions(gatewayclassesResource, *name, types.ApplyPatchType, data, opts.ToPatchOptions(), "status"), emptyResult)
+	if obj == nil {
+		return emptyResult, err
 	}
 	return obj.(*v1beta1.GatewayClass), err
 }
