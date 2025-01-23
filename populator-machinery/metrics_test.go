@@ -96,8 +96,6 @@ volume_populator_operations_in_flight 0
 }
 
 func TestInFlightMetric(t *testing.T) {
-	inFlightCheckInterval = time.Millisecond * 50
-
 	mgr := initMgr()
 	defer mgr.stopListener()
 	srvAddr := "http://" + mgr.srv.Addr + httpPattern
