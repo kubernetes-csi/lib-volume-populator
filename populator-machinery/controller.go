@@ -185,8 +185,6 @@ type PopulatorParams struct {
 	Pvc *corev1.PersistentVolumeClaim
 	// PvcPrime is the temporary PVC created by volume populator
 	PvcPrime *corev1.PersistentVolumeClaim
-	// PV refers to the storage instance where data will be transferred, and it will be bound to the original PVC when the data transfer is complete
-	PV *corev1.PersistentVolume
 	// StorageClass is the original StorageClass Pvc refer to
 	StorageClass *storagev1.StorageClass
 	// Unstructured is the CR data source created by user
@@ -776,11 +774,6 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 						// We'll get called again later when the pvcPrime gets bounded
 						return nil
 					}
-					pv, err := params.KubeClient.CoreV1().PersistentVolumes().Get(ctx, pvcPrime.Spec.VolumeName, metav1.GetOptions{})
-					if err != nil {
-						return err
-					}
-					params.PV = pv
 
 					err = c.providerFunctionConfig.PopulateFn(ctx, *params)
 					if err != nil {
