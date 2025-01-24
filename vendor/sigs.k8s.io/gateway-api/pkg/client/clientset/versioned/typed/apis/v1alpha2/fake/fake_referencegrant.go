@@ -20,12 +20,15 @@ package fake
 
 import (
 	"context"
+	json "encoding/json"
+	"fmt"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
+	apisv1alpha2 "sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1alpha2"
 	v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
@@ -41,22 +44,24 @@ var referencegrantsKind = v1alpha2.SchemeGroupVersion.WithKind("ReferenceGrant")
 
 // Get takes name of the referenceGrant, and returns the corresponding referenceGrant object, and an error if there is any.
 func (c *FakeReferenceGrants) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha2.ReferenceGrant, err error) {
+	emptyResult := &v1alpha2.ReferenceGrant{}
 	obj, err := c.Fake.
-		Invokes(testing.NewGetAction(referencegrantsResource, c.ns, name), &v1alpha2.ReferenceGrant{})
+		Invokes(testing.NewGetActionWithOptions(referencegrantsResource, c.ns, name, options), emptyResult)
 
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 	return obj.(*v1alpha2.ReferenceGrant), err
 }
 
 // List takes label and field selectors, and returns the list of ReferenceGrants that match those selectors.
 func (c *FakeReferenceGrants) List(ctx context.Context, opts v1.ListOptions) (result *v1alpha2.ReferenceGrantList, err error) {
+	emptyResult := &v1alpha2.ReferenceGrantList{}
 	obj, err := c.Fake.
-		Invokes(testing.NewListAction(referencegrantsResource, referencegrantsKind, c.ns, opts), &v1alpha2.ReferenceGrantList{})
+		Invokes(testing.NewListActionWithOptions(referencegrantsResource, referencegrantsKind, c.ns, opts), emptyResult)
 
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 
 	label, _, _ := testing.ExtractFromListOptions(opts)
@@ -75,28 +80,30 @@ func (c *FakeReferenceGrants) List(ctx context.Context, opts v1.ListOptions) (re
 // Watch returns a watch.Interface that watches the requested referenceGrants.
 func (c *FakeReferenceGrants) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 	return c.Fake.
-		InvokesWatch(testing.NewWatchAction(referencegrantsResource, c.ns, opts))
+		InvokesWatch(testing.NewWatchActionWithOptions(referencegrantsResource, c.ns, opts))
 
 }
 
 // Create takes the representation of a referenceGrant and creates it.  Returns the server's representation of the referenceGrant, and an error, if there is any.
 func (c *FakeReferenceGrants) Create(ctx context.Context, referenceGrant *v1alpha2.ReferenceGrant, opts v1.CreateOptions) (result *v1alpha2.ReferenceGrant, err error) {
+	emptyResult := &v1alpha2.ReferenceGrant{}
 	obj, err := c.Fake.
-		Invokes(testing.NewCreateAction(referencegrantsResource, c.ns, referenceGrant), &v1alpha2.ReferenceGrant{})
+		Invokes(testing.NewCreateActionWithOptions(referencegrantsResource, c.ns, referenceGrant, opts), emptyResult)
 
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 	return obj.(*v1alpha2.ReferenceGrant), err
 }
 
 // Update takes the representation of a referenceGrant and updates it. Returns the server's representation of the referenceGrant, and an error, if there is any.
 func (c *FakeReferenceGrants) Update(ctx context.Context, referenceGrant *v1alpha2.ReferenceGrant, opts v1.UpdateOptions) (result *v1alpha2.ReferenceGrant, err error) {
+	emptyResult := &v1alpha2.ReferenceGrant{}
 	obj, err := c.Fake.
-		Invokes(testing.NewUpdateAction(referencegrantsResource, c.ns, referenceGrant), &v1alpha2.ReferenceGrant{})
+		Invokes(testing.NewUpdateActionWithOptions(referencegrantsResource, c.ns, referenceGrant, opts), emptyResult)
 
 	if obj == nil {
-		return nil, err
+		return emptyResult, err
 	}
 	return obj.(*v1alpha2.ReferenceGrant), err
 }
@@ -111,7 +118,7 @@ func (c *FakeReferenceGrants) Delete(ctx context.Context, name string, opts v1.D
 
 // DeleteCollection deletes a collection of objects.
 func (c *FakeReferenceGrants) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
-	action := testing.NewDeleteCollectionAction(referencegrantsResource, c.ns, listOpts)
+	action := testing.NewDeleteCollectionActionWithOptions(referencegrantsResource, c.ns, opts, listOpts)
 
 	_, err := c.Fake.Invokes(action, &v1alpha2.ReferenceGrantList{})
 	return err
@@ -119,11 +126,35 @@ func (c *FakeReferenceGrants) DeleteCollection(ctx context.Context, opts v1.Dele
 
 // Patch applies the patch and returns the patched referenceGrant.
 func (c *FakeReferenceGrants) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha2.ReferenceGrant, err error) {
+	emptyResult := &v1alpha2.ReferenceGrant{}
 	obj, err := c.Fake.
-		Invokes(testing.NewPatchSubresourceAction(referencegrantsResource, c.ns, name, pt, data, subresources...), &v1alpha2.ReferenceGrant{})
+		Invokes(testing.NewPatchSubresourceActionWithOptions(referencegrantsResource, c.ns, name, pt, data, opts, subresources...), emptyResult)
 
 	if obj == nil {
+		return emptyResult, err
+	}
+	return obj.(*v1alpha2.ReferenceGrant), err
+}
+
+// Apply takes the given apply declarative configuration, applies it and returns the applied referenceGrant.
+func (c *FakeReferenceGrants) Apply(ctx context.Context, referenceGrant *apisv1alpha2.ReferenceGrantApplyConfiguration, opts v1.ApplyOptions) (result *v1alpha2.ReferenceGrant, err error) {
+	if referenceGrant == nil {
+		return nil, fmt.Errorf("referenceGrant provided to Apply must not be nil")
+	}
+	data, err := json.Marshal(referenceGrant)
+	if err != nil {
 		return nil, err
+	}
+	name := referenceGrant.Name
+	if name == nil {
+		return nil, fmt.Errorf("referenceGrant.Name must be provided to Apply")
+	}
+	emptyResult := &v1alpha2.ReferenceGrant{}
+	obj, err := c.Fake.
+		Invokes(testing.NewPatchSubresourceActionWithOptions(referencegrantsResource, c.ns, *name, types.ApplyPatchType, data, opts.ToPatchOptions()), emptyResult)
+
+	if obj == nil {
+		return emptyResult, err
 	}
 	return obj.(*v1alpha2.ReferenceGrant), err
 }

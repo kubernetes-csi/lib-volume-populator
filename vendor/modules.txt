@@ -10,7 +10,7 @@ github.com/cespare/xxhash/v2
 # github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 ## explicit
 github.com/davecgh/go-spew/spew
-# github.com/emicklei/go-restful/v3 v3.11.0
+# github.com/emicklei/go-restful/v3 v3.12.0
 ## explicit; go 1.13
 github.com/emicklei/go-restful/v3
 github.com/emicklei/go-restful/v3/log
@@ -23,8 +23,8 @@ github.com/go-logr/logr
 # github.com/go-openapi/jsonpointer v0.21.0
 ## explicit; go 1.20
 github.com/go-openapi/jsonpointer
-# github.com/go-openapi/jsonreference v0.20.2
-## explicit; go 1.13
+# github.com/go-openapi/jsonreference v0.21.0
+## explicit; go 1.20
 github.com/go-openapi/jsonreference
 github.com/go-openapi/jsonreference/internal
 # github.com/go-openapi/swag v0.23.0
@@ -202,7 +202,7 @@ gopkg.in/inf.v0
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# k8s.io/api v0.32.0
+# k8s.io/api v0.32.1
 ## explicit; go 1.23.0
 k8s.io/api/admissionregistration/v1
 k8s.io/api/admissionregistration/v1alpha1
@@ -316,7 +316,7 @@ k8s.io/apimachinery/pkg/version
 k8s.io/apimachinery/pkg/watch
 k8s.io/apimachinery/third_party/forked/golang/json
 k8s.io/apimachinery/third_party/forked/golang/reflect
-# k8s.io/client-go v0.32.0
+# k8s.io/client-go v0.32.1
 ## explicit; go 1.23.0
 k8s.io/client-go/applyconfigurations
 k8s.io/client-go/applyconfigurations/admissionregistration/v1
@@ -645,12 +645,12 @@ k8s.io/client-go/util/homedir
 k8s.io/client-go/util/keyutil
 k8s.io/client-go/util/watchlist
 k8s.io/client-go/util/workqueue
-# k8s.io/component-base v0.32.0
+# k8s.io/component-base v0.32.1
 ## explicit; go 1.23.0
 k8s.io/component-base/metrics
 k8s.io/component-base/metrics/prometheusextension
 k8s.io/component-base/version
-# k8s.io/component-helpers v0.32.0
+# k8s.io/component-helpers v0.32.1
 ## explicit; go 1.23.0
 k8s.io/component-helpers/scheduling/corev1
 k8s.io/component-helpers/scheduling/corev1/nodeaffinity
@@ -687,23 +687,39 @@ k8s.io/utils/net
 k8s.io/utils/pointer
 k8s.io/utils/ptr
 k8s.io/utils/trace
-# sigs.k8s.io/gateway-api v0.8.1
-## explicit; go 1.20
+# sigs.k8s.io/gateway-api v1.2.1
+## explicit; go 1.22.0
+sigs.k8s.io/gateway-api/apis/applyconfiguration
+sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1
+sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1alpha2
+sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1alpha3
+sigs.k8s.io/gateway-api/apis/applyconfiguration/apis/v1beta1
+sigs.k8s.io/gateway-api/apis/applyconfiguration/internal
+sigs.k8s.io/gateway-api/apis/v1
 sigs.k8s.io/gateway-api/apis/v1alpha2
+sigs.k8s.io/gateway-api/apis/v1alpha3
 sigs.k8s.io/gateway-api/apis/v1beta1
 sigs.k8s.io/gateway-api/pkg/client/clientset/versioned
 sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake
 sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/scheme
+sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1
+sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1/fake
 sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1alpha2
 sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1alpha2/fake
+sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1alpha3
+sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1alpha3/fake
 sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1beta1
 sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/typed/apis/v1beta1/fake
 sigs.k8s.io/gateway-api/pkg/client/informers/externalversions
 sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis
+sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis/v1
 sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis/v1alpha2
+sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis/v1alpha3
 sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/apis/v1beta1
 sigs.k8s.io/gateway-api/pkg/client/informers/externalversions/internalinterfaces
+sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1
 sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1alpha2
+sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1alpha3
 sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1beta1
 # sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3
 ## explicit; go 1.21
