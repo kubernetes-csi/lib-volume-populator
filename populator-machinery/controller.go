@@ -83,6 +83,9 @@ const (
 	reasonWaitForDataPopulationFinished = "PopulatorWaitForDataPopulationFinished"
 	reasonStorageClassCreationError     = "PopulatorStorageClassCreationError"
 	reasonDataSourceNotFound            = "PopulatorDataSourceNotFound"
+	reasonRebindOperationFinished       = "RebindOperationFinished"
+	reasonRebindOperationFailed         = "RebindOperationFailed"
+	reasonWaitForRebindFinished         = "WaitForRebindFinished"
 )
 
 type empty struct{}
@@ -174,6 +177,10 @@ type ProviderFunctionConfig struct {
 	PopulateFn func(context.Context, PopulatorParams) error
 	// PopulateCompleteFn is the provider specific data population completeness check function, return true when data transfer gets completed
 	PopulateCompleteFn func(context.Context, PopulatorParams) (bool, error)
+	// RebindCompleteFn is the provider specific volume rebind completeness check function, return true when the user's PVC is in Bound state
+	// If set, the volume populator library will defer rebinding to this function, rather than rebinding the PV referenced by PVC Prime
+	// to the user provided PVC. It is expected that the user's PVC will be bound, and PVC Prime will have status "Lost"
+	RebindCompleteFn func(context.Context, PopulatorParams) (bool, error)
 	// PopulateCleanupFn is the provider specific data population cleanup function, cleanup resouces after data population completed
 	PopulateCleanupFn func(context.Context, PopulatorParams) error
 }
@@ -892,32 +899,47 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			// Examine the claimref for the PV and see if it's bound to the correct PVC
 			claimRef := pv.Spec.ClaimRef
 			if claimRef.Name != pvc.Name || claimRef.Namespace != pvc.Namespace || claimRef.UID != pvc.UID {
-				// Make new PV with strategic patch values to perform the PV rebind
-				patchPv := corev1.PersistentVolume{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:        pv.Name,
-						Annotations: map[string]string{},
-					},
-					Spec: corev1.PersistentVolumeSpec{
-						ClaimRef: &corev1.ObjectReference{
-							Namespace:       pvc.Namespace,
-							Name:            pvc.Name,
-							UID:             pvc.UID,
-							ResourceVersion: pvc.ResourceVersion,
+				if c.providerFunctionConfig != nil && c.providerFunctionConfig.RebindCompleteFn != nil {
+					complete, err := c.providerFunctionConfig.RebindCompleteFn(ctx, *params)
+					if err != nil {
+						// Handle rebind error appropriately, e.g., log and requeue
+						c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonRebindOperationFailed, "Rebind operation failed: %s", err.Error())
+						return err
+					}
+					if !complete {
+						// TODO: Revisited if there is a better way to requeue pvc than return an error
+						// Return error to force reque pvc. We'll get called again later when the population operation complete
+						return fmt.Errorf(reasonWaitForRebindFinished)
+					}
+				} else {
+					// Make new PV with strategic patch values to perform the PV rebind
+					patchPv := corev1.PersistentVolume{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:        pv.Name,
+							Annotations: map[string]string{},
 						},
-					},
+						Spec: corev1.PersistentVolumeSpec{
+							ClaimRef: &corev1.ObjectReference{
+								Namespace:       pvc.Namespace,
+								Name:            pvc.Name,
+								UID:             pvc.UID,
+								ResourceVersion: pvc.ResourceVersion,
+							},
+						},
+					}
+					patchPv.Annotations[c.populatedFromAnno] = pvc.Namespace + "/" + dataSourceRef.Name
+					var patchData []byte
+					patchData, err = json.Marshal(patchPv)
+					if err != nil {
+						return err
+					}
+					_, err = c.kubeClient.CoreV1().PersistentVolumes().Patch(ctx, pv.Name, types.StrategicMergePatchType,
+						patchData, metav1.PatchOptions{})
+					if err != nil {
+						return err
+					}
 				}
-				patchPv.Annotations[c.populatedFromAnno] = pvc.Namespace + "/" + dataSourceRef.Name
-				var patchData []byte
-				patchData, err = json.Marshal(patchPv)
-				if err != nil {
-					return err
-				}
-				_, err = c.kubeClient.CoreV1().PersistentVolumes().Patch(ctx, pv.Name, types.StrategicMergePatchType,
-					patchData, metav1.PatchOptions{})
-				if err != nil {
-					return err
-				}
+				c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonRebindOperationFinished, "Rebind operation finished")
 
 				// Don't start cleaning up yet -- we need to bind controller to acknowledge
 				// the switch

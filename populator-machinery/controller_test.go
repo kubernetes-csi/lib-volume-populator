@@ -62,6 +62,8 @@ type testCase struct {
 	populateFn func(context.Context, PopulatorParams) error
 	// Provider specific data population completeness check function, return true when data transfer gets completed.
 	populateCompleteFn func(context.Context, PopulatorParams) (bool, error)
+	// Provider specific data population completeness check function, return true when data transfer gets completed.
+	rebindCompleteFn func(context.Context, PopulatorParams) (bool, error)
 	// The original PVC gets deleted or not
 	pvcDeleted bool
 	// PvcPrimeMutator is the mutator function for pvcPrime
@@ -100,11 +102,13 @@ const (
 	testStorageClassName               = "test-sc"
 	testPvcPrimeName                   = populatorPvcPrefix + "-" + testPvcUid
 	testPvName                         = "test-pv"
+	testPvName2                        = "test-pv-2"
 	testNodeName                       = "test-node-name"
 	testPodName                        = populatorPodPrefix + "-" + testPvcUid
 	testProvisioner                    = "test.provisioner"
 	testPopulationOperationStartFailed = "Test populate operation start failed"
 	testPopulateCompleteFailed         = "Test populate operation complete failed"
+	testRebindCompleteFailed           = "Test rebind operation failed"
 	testMutatePVCPrimeFailed           = "Test mutate pvcPrime failed"
 	dataSourceKey                      = "unstructured/" + testPvcNamespace + "/" + testDataSourceName
 	storageClassKey                    = "sc/" + testStorageClassName
@@ -252,6 +256,26 @@ func populateCompleteSuccess(ctx context.Context, p PopulatorParams) (bool, erro
 	return true, nil
 }
 
+func rebindPvCompleteError(ctx context.Context, p PopulatorParams) (bool, error) {
+	return false, fmt.Errorf(testRebindCompleteFailed)
+}
+
+func rebindNewPvSuccess(pvName string) func(ctx context.Context, p PopulatorParams) (bool, error) {
+	return func(ctx context.Context, p PopulatorParams) (bool, error) {
+		updatePvc, err := p.KubeClient.CoreV1().PersistentVolumeClaims(p.Pvc.Namespace).Get(ctx, p.Pvc.Name, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+		updatePvc.Spec.VolumeName = pvName
+		_, err = p.KubeClient.CoreV1().PersistentVolumeClaims(p.Pvc.Namespace).Update(ctx, updatePvc, metav1.UpdateOptions{})
+		if err != nil {
+			return false, err
+		}
+
+		return true, nil
+	}
+}
+
 func pvcPrimeMutateAccessModeRWX(mp PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error) {
 	accessMode := v1.ReadWriteMany
 	mp.PvcPrime.Spec.AccessModes[0] = accessMode
@@ -316,6 +340,9 @@ func initTest(test testCase) (
 			PopulateFn:         test.populateFn,
 			PopulateCompleteFn: test.populateCompleteFn,
 		}
+	}
+	if test.populateCompleteFn != nil {
+		providerFunctionConfig.RebindCompleteFn = test.rebindCompleteFn
 	}
 
 	var mutatorConfig *MutatorConfig
@@ -1225,6 +1252,56 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
 				pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, testPvcUid, []string{pvFinalizer}, nil, "", v1.ReadWriteOnce),
 				pv:       pv(testPvcName, testPvcNamespace, testPvcUid),
+			},
+		},
+		{
+			name:         "Wait for the bind controller to rebind the PV with providerRebindFn",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer, vpFinalizer},
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, testPvcUid, []string{pvFinalizer}, nil, "", v1.ReadWriteOnce),
+				pv(testPvcPrimeName, testVpWorkingNamespace, testPvcUid),
+			},
+			populateFn:         PopulateOperationStartSuccess,
+			populateCompleteFn: populateCompleteSuccess,
+			rebindCompleteFn:   rebindNewPvSuccess(testPvName2),
+			expectedResult:     nil,
+			expectedKeys:       []string{pvcPrimeKey, pvKey},
+			expectedObjects: &vpObjects{
+				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, testPvName2, testPvcUid, []string{pvFinalizer, vpFinalizer},
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, testPvcUid, []string{pvFinalizer}, nil, "", v1.ReadWriteOnce),
+				pv:       pv(testPvcPrimeName, testVpWorkingNamespace, testPvcUid),
+			},
+		},
+		{
+			name:         "Wait for the bind controller failed to rebind",
+			key:          "pvc/" + testPvcNamespace + "/" + testPvcName,
+			pvcNamespace: testPvcNamespace,
+			pvcName:      testPvcName,
+			initialObjects: []runtime.Object{
+				pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer, vpFinalizer},
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				ust(),
+				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
+				pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, testPvcUid, []string{pvFinalizer}, nil, "", v1.ReadWriteOnce),
+				pv(testPvcPrimeName, testVpWorkingNamespace, testPvcUid),
+			},
+			populateFn:         PopulateOperationStartSuccess,
+			populateCompleteFn: populateCompleteSuccess,
+			rebindCompleteFn:   rebindPvCompleteError,
+			expectedResult:     fmt.Errorf(testRebindCompleteFailed),
+			expectedKeys:       []string{pvcPrimeKey, pvKey},
+			expectedObjects: &vpObjects{
+				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer, vpFinalizer},
+					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
+				pvcPrime: pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, testPvName, testPvcUid, []string{pvFinalizer}, nil, "", v1.ReadWriteOnce),
+				pv:       pv(testPvcPrimeName, testVpWorkingNamespace, testPvcUid),
 			},
 		},
 		{
