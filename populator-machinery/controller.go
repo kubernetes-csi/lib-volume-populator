@@ -79,7 +79,6 @@ const (
 	reasonPopulateOperationFailed       = "PopulateOperationFailed"
 	reasonPopulateOperationFinished     = "PopulateOperationFinished"
 	reasonPVCPrimeCreationError         = "PopulatorPVCPrimeCreationError"
-	reasonPVCPrimeMutatorError          = "reasonPVCPrimeMutatorError"
 	reasonWaitForDataPopulationFinished = "PopulatorWaitForDataPopulationFinished"
 	reasonStorageClassCreationError     = "PopulatorStorageClassCreationError"
 	reasonDataSourceNotFound            = "PopulatorDataSourceNotFound"
@@ -117,7 +116,6 @@ type controller struct {
 	referenceGrantSynced   cache.InformerSynced
 	podConfig              *PodConfig
 	providerFunctionConfig *ProviderFunctionConfig
-	mutatorConfig          *MutatorConfig
 	crossNamespace         bool
 	providerMetricManager  *ProviderMetricManager
 }
@@ -142,9 +140,6 @@ type VolumePopulatorConfig struct {
 	// ProviderFunctionConfig is the configuration for invoking provider functions. Either PodConfig or ProviderFunctionConfig should
 	// be specified. PodConfig and ProviderFunctionConfig can't be provided at the same time
 	ProviderFunctionConfig *ProviderFunctionConfig
-	// MutatorConfig is the configuration for invoking mutator functions. You can specify your own mutator functions to modify the
-	// Kubernetes resources used for volume population
-	MutatorConfig *MutatorConfig
 	// ProviderMetricManager is the manager for provider specific metric handling
 	ProviderMetricManager *ProviderMetricManager
 	// CrossNamespace indicates if the populator supports data sources located in namespaces different than the PVC's namespace.
@@ -170,6 +165,9 @@ type PodConfig struct {
 }
 
 type ProviderFunctionConfig struct {
+	// CreatePVCPrimeFn is the provider specific PVCPRime creation function
+	// Returns a PVC object that should be created by the caller, otherwise an error if creation failed and should be retried.
+	CreatePVCPrimeFn func(context.Context, PopulatorParams) (*corev1.PersistentVolumeClaim, error)
 	// PopulateFn is the provider specific data population function
 	PopulateFn func(context.Context, PopulatorParams) error
 	// PopulateCompleteFn is the provider specific data population completeness check function, return true when data transfer gets completed
@@ -190,19 +188,6 @@ type PopulatorParams struct {
 	// Unstructured is the CR data source created by user
 	Unstructured *unstructured.Unstructured
 	Recorder     record.EventRecorder
-}
-
-type MutatorConfig struct {
-	// PvcPrimeMutator is the mutator function for pvcPrime. The function gets called to modify the PVC object before pvcPrime gets created.
-	PvcPrimeMutator func(PvcPrimeMutatorParams) (*corev1.PersistentVolumeClaim, error)
-}
-
-// PvcPrimeMutatorParams includes the parameters passing to the PvcPrimeMutator function
-type PvcPrimeMutatorParams struct {
-	// PvcPrime is the temporary PVC created by volume populator
-	PvcPrime *corev1.PersistentVolumeClaim
-	// StorageClass is the original StorageClass Pvc refer to
-	StorageClass *storagev1.StorageClass
 }
 
 func RunController(masterURL, kubeconfig, imageName, httpEndpoint, metricsPath, namespace, prefix string,
@@ -308,7 +293,6 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		referenceGrantSynced:   referenceGrants.Informer().HasSynced,
 		podConfig:              vpcfg.PodConfig,
 		providerFunctionConfig: vpcfg.ProviderFunctionConfig,
-		mutatorConfig:          vpcfg.MutatorConfig,
 		crossNamespace:         vpcfg.CrossNamespace,
 		providerMetricManager:  vpcfg.ProviderMetricManager,
 	}
@@ -714,36 +698,32 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		// TODO: Handle PVC' update while the original PVC changed
 		// If the PVC is unbound and PVC' doesn't exist yet, create PVC'
 		if "" == pvc.Spec.VolumeName && pvcPrime == nil {
-			pvcPrime = &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      pvcPrimeName,
-					Namespace: c.populatorNamespace,
-				},
-				Spec: corev1.PersistentVolumeClaimSpec{
-					AccessModes:      pvc.Spec.AccessModes,
-					Resources:        pvc.Spec.Resources,
-					StorageClassName: pvc.Spec.StorageClassName,
-					VolumeMode:       pvc.Spec.VolumeMode,
-				},
-			}
-			if waitForFirstConsumer {
-				pvcPrime.Annotations = map[string]string{
-					annSelectedNode: nodeName,
-				}
-			}
-			if c.mutatorConfig != nil && c.mutatorConfig.PvcPrimeMutator != nil {
-				mp := PvcPrimeMutatorParams{
-					PvcPrime:     pvcPrime,
-					StorageClass: storageClass,
-				}
-				pvcPrime, err = c.mutatorConfig.PvcPrimeMutator(mp)
-				if err != nil {
-					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPVCPrimeMutatorError, "Failed to mutate populator pvcPrime: %s", err)
+			if c.providerFunctionConfig != nil && c.providerFunctionConfig.CreatePVCPrimeFn != nil {
+				if pvcPrime, err = c.providerFunctionConfig.CreatePVCPrimeFn(ctx, *params); err != nil {
+					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPVCPrimeCreationError, "Failed to create PVC Prime: %s", err)
 					return err
 				}
 				if pvcPrime == nil {
-					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPVCPrimeMutatorError, "pvcPrime must not be nil")
+					c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPVCPrimeCreationError, "pvcPrime must not be nil")
 					return fmt.Errorf("pvcPrime must not be nil")
+				}
+			} else {
+				pvcPrime = &corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      pvcPrimeName,
+						Namespace: c.populatorNamespace,
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes:      pvc.Spec.AccessModes,
+						Resources:        pvc.Spec.Resources,
+						StorageClassName: pvc.Spec.StorageClassName,
+						VolumeMode:       pvc.Spec.VolumeMode,
+					},
+				}
+				if waitForFirstConsumer {
+					pvcPrime.Annotations = map[string]string{
+						annSelectedNode: nodeName,
+					}
 				}
 			}
 			pvcPrime, err = c.kubeClient.CoreV1().PersistentVolumeClaims(c.populatorNamespace).Create(ctx, pvcPrime, metav1.CreateOptions{})
