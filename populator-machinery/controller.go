@@ -109,7 +109,7 @@ type controller struct {
 	mu                     sync.Mutex
 	notifyMap              map[string]*stringSet
 	cleanupMap             map[string]*stringSet
-	workqueue              workqueue.RateLimitingInterface
+	workqueue              workqueue.TypedRateLimitingInterface[any]
 	gk                     schema.GroupKind
 	metrics                *metricsManager
 	recorder               record.EventRecorder
@@ -156,6 +156,9 @@ type VolumePopulatorConfig struct {
 	// status code of 1. Specify this channel when an external process needs to manage the controller's life-cycle (i.e. a process needs
 	// to manually close the stop channel).
 	StopCh chan struct{}
+	// Workqueue stores the work items to be processd by the volume populator. You can provide a custom workqueue;
+	// otherwise, a default workqueue is used
+	Workqueue workqueue.TypedRateLimitingInterface[any]
 }
 
 type PodConfig struct {
@@ -283,6 +286,13 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		klog.Fatalf("PodConfig and ProviderFunctionConfig can't be provided at the same time")
 	}
 
+	var wq workqueue.TypedRateLimitingInterface[any]
+	if vpcfg.Workqueue == nil {
+		wq = workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[any]())
+	} else {
+		wq = vpcfg.Workqueue
+	}
+
 	c := &controller{
 		kubeClient:             kubeClient,
 		populatorNamespace:     vpcfg.Namespace,
@@ -300,7 +310,7 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		unstSynced:             unstInformer.HasSynced,
 		notifyMap:              make(map[string]*stringSet),
 		cleanupMap:             make(map[string]*stringSet),
-		workqueue:              workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		workqueue:              wq,
 		gk:                     vpcfg.Gk,
 		metrics:                initMetrics(),
 		recorder:               getRecorder(kubeClient, vpcfg.Prefix+"-"+controllerNameSuffix),
