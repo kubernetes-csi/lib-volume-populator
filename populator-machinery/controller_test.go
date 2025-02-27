@@ -58,14 +58,14 @@ type testCase struct {
 	initialObjects []runtime.Object
 	// Args for the populator pod
 	populatorArgs func(b bool, u *unstructured.Unstructured) ([]string, error)
+	// Provider specific PVC prime creation function
+	pvcPrimeCreateFn func(context.Context, PopulatorParams) (*corev1.PersistentVolumeClaim, error)
 	// Provider specific data population function
 	populateFn func(context.Context, PopulatorParams) error
 	// Provider specific data population completeness check function, return true when data transfer gets completed.
 	populateCompleteFn func(context.Context, PopulatorParams) (bool, error)
 	// The original PVC gets deleted or not
 	pvcDeleted bool
-	// PvcPrimeMutator is the mutator function for pvcPrime
-	pvcPrimeMutator func(PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error)
 	// Expected errors
 	expectedResult error
 	// Expected keys in the notifyMap
@@ -105,7 +105,7 @@ const (
 	testProvisioner                    = "test.provisioner"
 	testPopulationOperationStartFailed = "Test populate operation start failed"
 	testPopulateCompleteFailed         = "Test populate operation complete failed"
-	testMutatePVCPrimeFailed           = "Test mutate pvcPrime failed"
+	testPvcPrimeCreateFailed           = "Test create pvcPrime failed"
 	dataSourceKey                      = "unstructured/" + testPvcNamespace + "/" + testDataSourceName
 	storageClassKey                    = "sc/" + testStorageClassName
 	podKey                             = "pod/" + testVpWorkingNamespace + "/" + testPodName
@@ -252,18 +252,18 @@ func populateCompleteSuccess(ctx context.Context, p PopulatorParams) (bool, erro
 	return true, nil
 }
 
-func pvcPrimeMutateAccessModeRWX(mp PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error) {
-	accessMode := v1.ReadWriteMany
-	mp.PvcPrime.Spec.AccessModes[0] = accessMode
-	return mp.PvcPrime, nil
+func pvcPrimeCreateError(ctx context.Context, p PopulatorParams) (*corev1.PersistentVolumeClaim, error) {
+	return nil, fmt.Errorf(testPvcPrimeCreateFailed)
 }
 
-func pvcPrimeMutateError(mp PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error) {
-	return mp.PvcPrime, fmt.Errorf(testMutatePVCPrimeFailed)
-}
-
-func pvcPrimeMutatePVCPrimeNil(mp PvcPrimeMutatorParams) (*v1.PersistentVolumeClaim, error) {
+func pvcPrimeCreateNil(ctx context.Context, p PopulatorParams) (*corev1.PersistentVolumeClaim, error) {
 	return nil, nil
+}
+
+func pvcPrimeCreateSuccess(pvcPrime *corev1.PersistentVolumeClaim) func(ctx context.Context, p PopulatorParams) (*corev1.PersistentVolumeClaim, error) {
+	return func(ctx context.Context, p PopulatorParams) (*corev1.PersistentVolumeClaim, error) {
+		return pvcPrime, nil
+	}
 }
 
 func initTest(test testCase) (
@@ -310,19 +310,14 @@ func initTest(test testCase) (
 		}
 	}
 
-	var providerFunctionConfig *ProviderFunctionConfig
+	var providerFunctionConfig *ProviderFunctionConfig = &ProviderFunctionConfig{}
 	if test.populateFn != nil || test.populateCompleteFn != nil {
-		providerFunctionConfig = &ProviderFunctionConfig{
-			PopulateFn:         test.populateFn,
-			PopulateCompleteFn: test.populateCompleteFn,
-		}
+		providerFunctionConfig.PopulateFn = test.populateFn
+		providerFunctionConfig.PopulateCompleteFn = test.populateCompleteFn
 	}
 
-	var mutatorConfig *MutatorConfig
-	if test.pvcPrimeMutator != nil {
-		mutatorConfig = &MutatorConfig{
-			PvcPrimeMutator: test.pvcPrimeMutator,
-		}
+	if test.pvcPrimeCreateFn != nil {
+		providerFunctionConfig.CreatePVCPrimeFn = test.pvcPrimeCreateFn
 	}
 
 	c := &controller{
@@ -350,7 +345,6 @@ func initTest(test testCase) (
 		referenceGrantSynced:   referenceGrants.Informer().HasSynced,
 		podConfig:              podConfig,
 		providerFunctionConfig: providerFunctionConfig,
-		mutatorConfig:          mutatorConfig,
 	}
 	return c, pvcInformer, unstInformer, scInformer, podInformer, pvInformer
 }
@@ -367,7 +361,7 @@ func compareResult(want error, got error) bool {
 
 func compareNotifyMap(want []string, got map[string]*stringSet) error {
 	if len(want) != len(got) {
-		return fmt.Errorf("The number of keys expected is different from actual. Expect %v, got %v", len(want), len(got))
+		return fmt.Errorf("The number of keys expected is different from actual. Expect %v, got %v. Want %v: Got: %v", len(want), len(got), want, got)
 	}
 	for _, key := range want {
 		if got[key] == nil {
@@ -682,10 +676,10 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
 			},
-			populatorArgs:   populatorArgs,
-			pvcPrimeMutator: pvcPrimeMutateAccessModeRWX,
-			expectedResult:  nil,
-			expectedKeys:    []string{podKey, pvcPrimeKey},
+			populatorArgs:    populatorArgs,
+			pvcPrimeCreateFn: pvcPrimeCreateSuccess(pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, "", "", []string{}, nil, "", v1.ReadWriteMany)),
+			expectedResult:   nil,
+			expectedKeys:     []string{podKey, pvcPrimeKey},
 			expectedObjects: &vpObjects{
 				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer, vpFinalizer},
 					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
@@ -710,10 +704,10 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
 			},
-			populatorArgs:   populatorArgs,
-			pvcPrimeMutator: pvcPrimeMutateError,
-			expectedResult:  fmt.Errorf(testMutatePVCPrimeFailed),
-			expectedKeys:    []string{podKey, pvcPrimeKey},
+			populatorArgs:    populatorArgs,
+			pvcPrimeCreateFn: pvcPrimeCreateError,
+			expectedResult:   fmt.Errorf(testPvcPrimeCreateFailed),
+			expectedKeys:     []string{podKey, pvcPrimeKey},
 			expectedObjects: &vpObjects{
 				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer},
 					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
@@ -730,10 +724,10 @@ func TestSyncPvcWithPopulatorPod(t *testing.T) {
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
 			},
-			populatorArgs:   populatorArgs,
-			pvcPrimeMutator: pvcPrimeMutatePVCPrimeNil,
-			expectedResult:  fmt.Errorf("pvcPrime must not be nil"),
-			expectedKeys:    []string{podKey, pvcPrimeKey},
+			populatorArgs:    populatorArgs,
+			pvcPrimeCreateFn: pvcPrimeCreateNil,
+			expectedResult:   fmt.Errorf("pvcPrime must not be nil"),
+			expectedKeys:     []string{podKey, pvcPrimeKey},
 			expectedObjects: &vpObjects{
 				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer},
 					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
@@ -1076,10 +1070,10 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
 			},
-			pvcPrimeMutator: pvcPrimeMutateAccessModeRWX,
-			populateFn:      populateOperationStartError,
-			expectedResult:  nil,
-			expectedKeys:    []string{pvcPrimeKey},
+			pvcPrimeCreateFn: pvcPrimeCreateSuccess(pvc(testPvcPrimeName, testVpWorkingNamespace, "", testStorageClassName, "", "", []string{}, nil, "", v1.ReadWriteMany)),
+			populateFn:       populateOperationStartError,
+			expectedResult:   nil,
+			expectedKeys:     []string{pvcPrimeKey},
 			expectedObjects: &vpObjects{
 				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer, vpFinalizer},
 					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
@@ -1103,10 +1097,10 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
 			},
-			pvcPrimeMutator: pvcPrimeMutateError,
-			populateFn:      populateOperationStartError,
-			expectedResult:  fmt.Errorf(testMutatePVCPrimeFailed),
-			expectedKeys:    []string{pvcPrimeKey},
+			pvcPrimeCreateFn: pvcPrimeCreateError,
+			populateFn:       populateOperationStartError,
+			expectedResult:   fmt.Errorf(testPvcPrimeCreateFailed),
+			expectedKeys:     []string{pvcPrimeKey},
 			expectedObjects: &vpObjects{
 				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer},
 					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
@@ -1123,10 +1117,10 @@ func TestSyncPvcWithProviderImplementation(t *testing.T) {
 				ust(),
 				sc(testStorageClassName, storagev1.VolumeBindingImmediate),
 			},
-			pvcPrimeMutator: pvcPrimeMutatePVCPrimeNil,
-			populateFn:      populateOperationStartError,
-			expectedResult:  fmt.Errorf("pvcPrime must not be nil"),
-			expectedKeys:    []string{pvcPrimeKey},
+			pvcPrimeCreateFn: pvcPrimeCreateNil,
+			populateFn:       populateOperationStartError,
+			expectedResult:   fmt.Errorf("pvcPrime must not be nil"),
+			expectedKeys:     []string{pvcPrimeKey},
 			expectedObjects: &vpObjects{
 				pvc: pvc(testPvcName, testPvcNamespace, "", testStorageClassName, "", testPvcUid, []string{pvFinalizer},
 					dsf(testApiGroup, testDatasourceKind, testDataSourceName, testPvcNamespace), "", v1.ReadWriteOnce),
