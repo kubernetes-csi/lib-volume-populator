@@ -13,7 +13,7 @@
 # limitations under the License.
 
 CMDS_DIR=example
-CMDS=hello-populator
+CMDS ?= hello-populator
 all: build
 
 include release-tools/build.make

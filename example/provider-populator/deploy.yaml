@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: provider
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provider-account
+  namespace: provider
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: provider-role
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, patch, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+
+  - apiGroups: [provider.example.com]
+    resources: [providers]
+    verbs: [get, list, watch]
+  # (Alpha) Access to referencegrants is only needed when the CSI driver
+  # has the CrossNamespaceVolumeDataSource controller capability.
+  # In that case, lib-volume-populator requires "get", "list", "watch"
+  # permissions  for "referencegrants" on "gateway.networking.k8s.io".
+  #- apiGroups: ["gateway.networking.k8s.io"]
+  #  resources: ["referencegrants"]
+  #  verbs: ["get", "list", "watch"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: provider-binding
+subjects:
+  - kind: ServiceAccount
+    name: provider-account
+    namespace: provider
+roleRef:
+  kind: ClusterRole
+  name: provider-role
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: provider-populator
+  namespace: provider
+spec:
+  selector:
+    matchLabels:
+      app: provider
+  template:
+    metadata:
+      labels:
+        app: provider
+    spec:
+      serviceAccount: provider-account
+      containers:
+        - name: provider
+          image: <YOUR_REPO>/provider-populator:v1.0.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode=controller
+            - --http-endpoint=:8080
+          ports:
+            - containerPort: 8080
+              name: http-endpoint
+              protocol: TCP
+---
+kind: VolumePopulator
+apiVersion: populator.storage.k8s.io/v1beta1
+metadata:
+  name: provider-populator
+sourceKind:
+  group: provider.example.com
+  kind: provider
