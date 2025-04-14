@@ -72,6 +72,14 @@ func populateFn(ctx context.Context, params populatorMachinery.PopulatorParams) 
 	// Implement the provider-specific logic to initiate volume population.
 	// This may involve calling cloud-native APIs or creating temporary Kubernetes resources
 	// such as Pods or Jobs for data transfer.
+
+	// Example steps:
+	// 1. Retrieve data source details from the defined CRD.
+	// 2. Initiate a data transfer job to params.PvcPrime using params.KubeClient.
+	// 3. Report the volume population status to the original PVC's through params.Recorder.
+	// 4. You should check if the transfer job already exists before creating it, otherwise the transfer job might
+	// get created multiple times if everytime you use a unique name.
+
 	klog.Infof("Run populateFn")
 	return nil
 }
@@ -80,13 +88,27 @@ func populateCompleteFn(ctx context.Context, params populatorMachinery.Populator
 	// Implement the provider-specific logic to determine the status of volume population.
 	// This may involve calling cloud-native APIs or checking the completion status of
 	// temporary Kubernetes resources like Pods or Jobs.
+
+	// Example steps:
+	// 1. Fetch the transfer job using params.KubeClient.
+	// 2. Verify if the job has finished successfully (returns true) or is still running (returns false).
+	// 3. If the transfer job encountered an error, evaluate the need for cleanup.
+	// 4. Report the volume population status to the original PVC through params.Recorder.
+
 	klog.Infof("Run populateCompleteFn")
 	return true, nil
 }
 
 func populateCleanupFn(ctx context.Context, params populatorMachinery.PopulatorParams) error {
 	// Implement the provider-specific logic to clean up any temporary resources
-	// that were created during the volume population process.
+	// that were created during the volume population process. This step happens after PV rebind to the original PVC
+	// and before the PVC' gets deleted.
+
+	// Example steps:
+	// 1. Fetch the transfer job using params.KubeClient.
+	// 2. If the transfer job still exists delete the job.
+	// 3. Report the volume population status to the original PVC through params.Recorder.
+
 	klog.Infof("Run populateCleanupFn")
 	return nil
 }
