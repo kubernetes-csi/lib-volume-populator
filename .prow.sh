@@ -16,6 +16,9 @@
 
 CSI_PROW_TESTS_SANITY="sanity"
 
+export CSI_PROW_E2E_VERSION="v1.33.0"
+CSI_PROW_E2E_VERSION="v1.33.0"
+
 . release-tools/prow.sh
 
 main
