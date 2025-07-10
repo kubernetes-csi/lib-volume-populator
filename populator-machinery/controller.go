@@ -150,6 +150,14 @@ type VolumePopulatorConfig struct {
 	// CrossNamespace indicates if the populator supports data sources located in namespaces different than the PVC's namespace.
 	// This feature is alpha and requires the populator machinery to process gateway.networking.k8s.io/v1beta1.ReferenceGrant objects
 	CrossNamespace bool
+	// SharedInformerOptions is an array of SharedInformerOption. This can be provided when the volume populator shared informers are created,
+	// to allow for customization of the informer options. If unset, no additional SharedInformerOption is set when creating the shared informers.
+	//
+	// This is an advanced feature, specifically added as a parameter for memory management, and can be used by users that require greater access to the
+	// machinery of the volume populator library. It is the client's responsibility to ensure that if they are using functionality that limits
+	// resources or limits fields stored in the informer cache, they are responsible for ensuring that this is compatible with the library
+	// implementation they are using.
+	SharedInformerOptions []kubeinformers.SharedInformerOption
 	// StopCh is an optional channel you can provide to override the controller's default internal stop channel. In either case, sending
 	// an os.Interrupt or syscall.SIGTERM signal will initiate a graceful shutdown of the controller, by closing the stop channel
 	// (whichever one is used). If the graceful shutdown fails (a second signal is received), the controller will abruptly exit with a
@@ -273,7 +281,7 @@ func RunControllerWithConfig(vpcfg VolumePopulatorConfig) {
 		klog.Fatalf("Failed to create gateway client: %v", err)
 	}
 
-	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
+	kubeInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, time.Second*30, vpcfg.SharedInformerOptions...)
 	dynInformerFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Second*30)
 
 	pvcInformer := kubeInformerFactory.Core().V1().PersistentVolumeClaims()

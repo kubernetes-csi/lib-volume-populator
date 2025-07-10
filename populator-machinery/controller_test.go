@@ -288,7 +288,7 @@ func initTest(test testCase) (
 	dynClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	gatewayClient := gatewayfake.NewSimpleClientset()
 
-	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
+	kubeInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, time.Second*30)
 	dynInformerFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Second*30)
 
 	pvcInformer := kubeInformerFactory.Core().V1().PersistentVolumeClaims()
