@@ -613,6 +613,7 @@ func (c *controller) runWorker() {
 }
 
 func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName string) error {
+	klog.V(1).Infof("Starting sync for PVC %s/%s", pvcNamespace, pvcName)
 	if c.populatorNamespace == pvcNamespace {
 		// Ignore PVCs in our own working namespace
 		return nil
@@ -664,6 +665,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		if !errors.IsNotFound(err) {
 			return err
 		}
+		klog.Warningf("Data source %s/%s for PVC %s/%s not found, will retry", dataSourceRefNamespace, dataSourceRef.Name, pvc.Namespace, pvc.Name)
 		c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonDataSourceNotFound, "Data source %s/%s not found", dataSourceRefNamespace, dataSourceRef.Name)
 		c.addNotification(key, "unstructured", pvc.Namespace, dataSourceRef.Name)
 		// We'll get called again later when the data source exists
@@ -695,6 +697,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			waitForFirstConsumer = true
 			nodeName = pvc.Annotations[annSelectedNode]
 			if nodeName == "" {
+				klog.V(2).InfoS("Waiting for node selection due to WaitForFirstConsumer mode", "pvc", klog.KObj(pvc))
 				// Wait for the PVC to get a node name before continuing
 				return nil
 			}
@@ -780,6 +783,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				return err
 			}
 			params.PvcPrime = pvcPrime
+			klog.V(2).InfoS("Created PVC Prime for data population", "pvc", klog.KObj(pvc), "pvcPrime", klog.KObj(pvcPrime))
 		}
 
 		if "" == pvc.Spec.VolumeName {
@@ -799,6 +803,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				if c.providerFunctionConfig.PopulateFn != nil {
 
 					if "" == pvcPrime.Spec.VolumeName {
+						klog.V(2).InfoS("Waiting for PVC Prime to be bound", "pvc", klog.KObj(pvc), "pvcPrime", klog.KObj(pvcPrime))
 						// We'll get called again later when the pvcPrime gets bounded
 						return nil
 					}
@@ -817,6 +822,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 						return err
 					}
 					if !complete {
+						klog.Infof("Data population for PVC %s/%s is not yet complete. Requeuing to check again later.", pvc.Namespace, pvc.Name)
 						// TODO: Revisited if there is a better way to requeue pvc than return an error
 						// Return error to force reque pvc. We'll get called again later when the population operation complete
 						return fmt.Errorf(reasonWaitForDataPopulationFinished)
@@ -880,6 +886,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 						return err
 					}
 					c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPodCreationSuccess, "Populator started")
+					klog.V(2).InfoS("Created populator pod", "pvc", klog.KObj(pvc), "pod", klog.KObj(pod))
 
 					// We'll get called again later when the pod exists
 					return nil
@@ -887,12 +894,14 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 				if corev1.PodSucceeded != pod.Status.Phase {
 					if corev1.PodFailed == pod.Status.Phase {
+						klog.Warningf("Populator pod %s/%s failed with message: %s", pod.Namespace, pod.Name, pod.Status.Message)
 						c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodFailed, "Populator failed: %s", pod.Status.Message)
 						// Delete failed pods so we can try again
 						err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
 						if err != nil {
 							return err
 						}
+						klog.V(2).InfoS("Cleaned up populator pod", "pvc", klog.KObj(pvc), "pod", klog.KObj(pod))
 					}
 					// We'll get called again later when the pod succeeds
 					return nil
@@ -945,6 +954,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				if err != nil {
 					return err
 				}
+				klog.V(2).InfoS("Successfully rebound PV to target PVC", "pv", klog.KObj(pv), "pvc", klog.KObj(pvc))
 
 				// Don't start cleaning up yet -- we need to bind controller to acknowledge
 				// the switch
@@ -998,6 +1008,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	if err != nil {
 		return err
 	}
+	klog.V(2).InfoS("Cleaned up temporary populator resources", "pvc", klog.KObj(pvc))
 
 	// Clean up our internal callback maps
 	c.cleanupNotifications(key)
