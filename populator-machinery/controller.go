@@ -664,6 +664,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		if !errors.IsNotFound(err) {
 			return err
 		}
+		klog.Warningf("Data source %s/%s for PVC %s/%s not found, will retry", dataSourceRefNamespace, dataSourceRef.Name, pvc.Namespace, pvc.Name)
 		c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonDataSourceNotFound, "Data source %s/%s not found", dataSourceRefNamespace, dataSourceRef.Name)
 		c.addNotification(key, "unstructured", pvc.Namespace, dataSourceRef.Name)
 		// We'll get called again later when the data source exists
@@ -687,7 +688,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 		}
 
 		if err := c.checkIntreeStorageClass(pvc, storageClass); err != nil {
-			klog.V(2).Infof("Ignoring PVC %s/%s: %s", pvcNamespace, pvcName, err)
+			klog.V(4).Infof("Ignoring PVC %s/%s: %s", pvcNamespace, pvcName, err)
 			return nil
 		}
 
@@ -695,6 +696,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 			waitForFirstConsumer = true
 			nodeName = pvc.Annotations[annSelectedNode]
 			if nodeName == "" {
+				klog.V(4).Infof("Waiting for node selection due to WaitForFirstConsumer mode for PVC %s/%s", pvc.Namespace, pvc.Name)
 				// Wait for the PVC to get a node name before continuing
 				return nil
 			}
@@ -780,6 +782,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				return err
 			}
 			params.PvcPrime = pvcPrime
+			klog.V(4).Infof("Created pvcPrime %s/%s for data population of PVC %s/%s", pvcPrime.Namespace, pvcPrime.Name, pvc.Namespace, pvc.Name)
 		}
 
 		if "" == pvc.Spec.VolumeName {
@@ -817,6 +820,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 						return err
 					}
 					if !complete {
+						klog.V(4).Infof("Data population for PVC %s/%s is not yet complete. Requeuing to check again later.", pvc.Namespace, pvc.Name)
 						// TODO: Revisited if there is a better way to requeue pvc than return an error
 						// Return error to force reque pvc. We'll get called again later when the population operation complete
 						return fmt.Errorf(reasonWaitForDataPopulationFinished)
@@ -880,6 +884,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 						return err
 					}
 					c.recorder.Eventf(pvc, corev1.EventTypeNormal, reasonPodCreationSuccess, "Populator started")
+					klog.V(4).Infof("Created populator pod %s/%s for PVC %s/%s", pod.Namespace, pod.Name, pvc.Namespace, pvc.Name)
 
 					// We'll get called again later when the pod exists
 					return nil
@@ -887,12 +892,14 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 
 				if corev1.PodSucceeded != pod.Status.Phase {
 					if corev1.PodFailed == pod.Status.Phase {
+						klog.Warningf("Populator pod %s/%s failed with message: %s", pod.Namespace, pod.Name, pod.Status.Message)
 						c.recorder.Eventf(pvc, corev1.EventTypeWarning, reasonPodFailed, "Populator failed: %s", pod.Status.Message)
 						// Delete failed pods so we can try again
 						err = c.kubeClient.CoreV1().Pods(c.populatorNamespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
 						if err != nil {
 							return err
 						}
+						klog.V(4).Infof("Cleaned up temporary populator pod %s/%s for PVC %s/%s", pod.Namespace, pod.Name, pvc.Namespace, pvc.Name)
 					}
 					// We'll get called again later when the pod succeeds
 					return nil
@@ -945,6 +952,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 				if err != nil {
 					return err
 				}
+				klog.V(4).Infof("Successfully rebound PV %s to target PVC %s/%s", pv.Name, pvc.Namespace, pvc.Name)
 
 				// Don't start cleaning up yet -- we need to bind controller to acknowledge
 				// the switch
@@ -998,6 +1006,7 @@ func (c *controller) syncPvc(ctx context.Context, key, pvcNamespace, pvcName str
 	if err != nil {
 		return err
 	}
+	klog.V(4).Infof("Cleaned up temporary populator resources for PVC %s/%s", pvc.Namespace, pvc.Name)
 
 	// Clean up our internal callback maps
 	c.cleanupNotifications(key)
