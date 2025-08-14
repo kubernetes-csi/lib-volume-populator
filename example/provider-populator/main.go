@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 
-	populatorMachinery "github.com/kubernetes-csi/lib-volume-populator/populator-machinery"
+	populatorMachinery "github.com/kubernetes-csi/lib-volume-populator/v3/populator-machinery"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"k8s.io/klog/v2"

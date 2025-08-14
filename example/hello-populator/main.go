@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
 
-	populator_machinery "github.com/kubernetes-csi/lib-volume-populator/populator-machinery"
+	populator_machinery "github.com/kubernetes-csi/lib-volume-populator/v3/populator-machinery"
 )
 
 const (
