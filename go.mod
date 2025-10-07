@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.65.0
+	github.com/prometheus/common v0.66.1
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
