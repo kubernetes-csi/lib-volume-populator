@@ -5,13 +5,13 @@ go 1.25.5
 require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
-	k8s.io/api v0.35.1
-	k8s.io/apimachinery v0.35.1
-	k8s.io/client-go v0.35.1
-	k8s.io/component-base v0.35.1
-	k8s.io/component-helpers v0.35.1
-	k8s.io/klog/v2 v2.130.1
-	sigs.k8s.io/gateway-api v1.4.1
+	k8s.io/api v0.35.2
+	k8s.io/apimachinery v0.35.2
+	k8s.io/client-go v0.35.2
+	k8s.io/component-base v0.35.2
+	k8s.io/component-helpers v0.35.2
+	k8s.io/klog/v2 v2.140.0
+	sigs.k8s.io/gateway-api v1.5.1
 )
 
 require (
@@ -65,6 +65,6 @@ require (
 	k8s.io/utils v0.0.0-20260108192941-914a6e750570 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
-	sigs.k8s.io/structured-merge-diff/v6 v6.3.1 // indirect
+	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
